@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from .attachment_rules import select_invoice_excels
+from .purchase_processor import build_summary, default_output_filename
+from .settings import PROJECT_ROOT, load_config
+from .state import append_log
+
+
+def process_files(paths: list[Path], config: dict) -> list[Path]:
+    outputs: list[Path] = []
+    for source in select_invoice_excels(paths):
+        output = Path(config["paths"]["processed"]) / default_output_filename(source)
+        result = build_summary(source, output)
+        outputs.append(Path(result["output"]))
+        append_log(config["paths"]["processing_log"], {
+            "status": "processed",
+            "source": "manual",
+            **result,
+            "output_file": result["output"],
+        })
+        print(f"Created {result['output']}")
+    return outputs
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Goldiee purchase invoice bot")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    process = sub.add_parser("process", help="Process one or more invoice Excel files")
+    process.add_argument("files", nargs="+", type=Path)
+
+    gmail_once = sub.add_parser("gmail-once", help="Check Gmail once for new invoices")
+    monitor = sub.add_parser("monitor", help="Run WhatsApp command listener and Gmail monitor")
+
+    whatsapp_login = sub.add_parser("whatsapp-login", help="Open Edge for WhatsApp QR/login")
+    item_master = sub.add_parser("item-master", help="Warm the complete Tally Stock Item Master cache")
+    stock_status = sub.add_parser("stock-status", help="Fetch Tally batch/PTR/MRP stock status")
+    dms_authorize = sub.add_parser("dms-authorize", help="Authorize the browserless DMS client")
+    dms_stock = sub.add_parser("dms-stock", help="Fetch current DMS stock without visible UI")
+    unloading_slip = sub.add_parser("unloading-slip", help="Create unloading slip for a purchase date")
+    unloading_slip.add_argument("date", help="Date like 30-05-2026 or 30/05/2026")
+
+    args = parser.parse_args()
+    config = load_config()
+
+    if args.command == "process":
+        process_files(args.files, config)
+        return 0
+
+    if args.command in {"gmail-once", "monitor"}:
+        if args.command == "monitor":
+            import asyncio
+
+            from .bot_runtime import run_bot
+
+            asyncio.run(run_bot(config))
+            return 0
+
+        from .gmail_monitor import get_gmail_service, monitor_gmail, process_new_messages
+        from .whatsapp_edge import send_to_configured_group
+
+        def send_to_whatsapp(message, attachments=()):
+            send_to_configured_group(config, message, attachments)
+
+        service = get_gmail_service(PROJECT_ROOT)
+        # Label creation is inside monitor_gmail; reuse it by importing the private helper here.
+        from .gmail_monitor import _ensure_label
+
+        label_id = _ensure_label(service, config["gmail"]["processed_label"])
+        process_new_messages(service, label_id, config, send_to_whatsapp)
+        return 0
+
+    if args.command == "whatsapp-login":
+        from .whatsapp_edge import send_to_configured_group
+
+        send_to_configured_group(config, "Goldiee Purchase Bot is connected.")
+        return 0
+
+    if args.command == "item-master":
+        from .tally_item_master import get_item_master
+
+        result = get_item_master(force_refresh=True)
+        print(f"Cached {result['item_count']} Stock Item masters.")
+        print(f"Company fingerprint: {result['company_fingerprint']}")
+        print(f"Cache: {result['cache_path']}")
+        return 0
+
+    if args.command == "stock-status":
+        from .tally_batch_stock import build, default_output_path
+
+        result = build(default_output_path())
+        append_log(config["paths"]["processing_log"], {
+            "status": "stock_status",
+            "source": "manual",
+            "output_file": result["output"],
+            "note": f"Rows: {result['rows']}; MRP rows: {result['mrp_rows']}; Sell rows: {result['sell_rows']}",
+        })
+        print(f"Created {result['output']}")
+        return 0
+
+    if args.command == "dms-authorize":
+        from .dms_client import authorize
+
+        authorize(config)
+        print("DMS authorization saved.")
+        return 0
+
+    if args.command == "dms-stock":
+        from .dms_client import DmsAuthenticationRequired, build_inventory_workbook
+
+        try:
+            result = build_inventory_workbook(config)
+        except DmsAuthenticationRequired as exc:
+            print(exc)
+            return 2
+        print(f"Created {result['output']} with {result['rows']} rows.")
+        return 0
+
+    if args.command == "unloading-slip":
+        from .unloading_slip import build_unloading_slip, parse_user_date
+
+        result = build_unloading_slip(parse_user_date(args.date))
+        append_log(config["paths"]["processing_log"], {
+            "status": "unloading_slip",
+            "source": "manual",
+            "output_file": result["xlsx"],
+            "note": f"PDF: {result['pdf']}; Rows: {result['rows']}",
+        })
+        print(f"Created {result['xlsx']}")
+        print(f"Created {result['pdf']}")
+        return 0
+
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

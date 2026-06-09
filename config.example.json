@@ -1,0 +1,31 @@
+{
+  "gmail": {
+    "account": "goenkatradeventures@gmail.com",
+    "sender": "information@goldiee.com",
+    "start_date": "2026-06-08",
+    "max_email_age_days": 3,
+    "processed_label": "Processed by Purchase Bot"
+  },
+  "whatsapp": {
+    "command": "purchase summary",
+    "group_name": "Goldiee Automation",
+    "edge_executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "edge_profile_dir": "edge-profile"
+  },
+  "tally": {
+    "company_name": "Goenka Tradeventures 2025-2026 (Goldiee)"
+  },
+  "dms": {
+    "company_id": 10456,
+    "company_name": "Goldiee Group"
+  },
+  "paths": {
+    "downloads": "downloads",
+    "processed": "processed",
+    "logs": "logs",
+    "state": "data/state.json",
+    "processing_log": "logs/processed_purchases.csv"
+  },
+  "poll_seconds": 120,
+  "whatsapp_poll_seconds": 5
+}
