@@ -255,6 +255,16 @@ def build_unloading_slip(target_date: datetime) -> dict[str, Any]:
                 ws.cell(excel_row, col).fill = fill
         rows_for_pdf.append((values, status))
 
+    total_cases = sum(row["cases"] for row in purchase_rows)
+    total_values = ["", "TOTAL CASES", "", total_cases, "", "", "", ""]
+    ws.append(total_values)
+    total_row = ws.max_row
+    for col in range(1, 9):
+        cell = ws.cell(total_row, col)
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+    rows_for_pdf.append((total_values, "total"))
+
     format_slip(ws)
     try:
         wb.save(xlsx_path)
@@ -270,6 +280,7 @@ def build_unloading_slip(target_date: datetime) -> dict[str, Any]:
         "purchase_files": [str(path) for path in purchase_files],
         "invoice_numbers": invoice_numbers,
         "rows": len(purchase_rows),
+        "total_cases": total_cases,
     }
 
 
@@ -399,21 +410,27 @@ def write_pdf(path: Path, rows: list[tuple[list[Any], str]], target_date: dateti
         elif status == "red":
             pdf.setFillColor(colors.HexColor("#FFC7CE"))
             pdf.rect(margin, y, usable_width, row_height, stroke=0, fill=1)
-        pdf.setFillColor(colors.black)
-        rendered = [
-            values[0],
-            values[1],
-            f"{values[2]:.2f}",
-            f"{values[3]:g}",
-            f"{values[4]:g}",
-            "",
-            "",
-            values[7],
-        ]
+        elif status == "total":
+            pdf.setFillColor(colors.HexColor("#1F4E78"))
+            pdf.rect(margin, y, usable_width, row_height, stroke=0, fill=1)
+        pdf.setFillColor(colors.white if status == "total" else colors.black)
+        if status == "total":
+            rendered = ["", "TOTAL CASES", "", f"{values[3]:g}", "", "", "", ""]
+        else:
+            rendered = [
+                values[0],
+                values[1],
+                f"{values[2]:.2f}",
+                f"{values[3]:g}",
+                f"{values[4]:g}",
+                "",
+                "",
+                values[7],
+            ]
         x = margin
         for idx, (cell, width) in enumerate(zip(rendered, col_widths)):
             align = "center" if idx in {0, 2, 3, 4, 5, 6} else "left"
-            draw_cell(x, y, width, row_height, cell, align=align)
+            draw_cell(x, y, width, row_height, cell, bold=status == "total", align=align)
             x += width
 
     pdf.showPage()
