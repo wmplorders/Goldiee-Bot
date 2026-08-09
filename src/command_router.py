@@ -20,7 +20,9 @@ def recognized_command(text: str) -> bool:
     normalized = " ".join(text.casefold().split())
     return (
         normalized == "purchase summary"
+        or normalized == "tally check"
         or normalized == "stock status"
+        or normalized.startswith("stock goldiee mail ")
         or normalized == "dms stock"
         or normalized.startswith("unloading slip ")
     )
@@ -33,16 +35,34 @@ async def run_command(
     source: str = "whatsapp",
 ) -> CommandResult:
     normalized = " ".join(text.casefold().split())
+    if normalized == "tally check":
+        return await asyncio.to_thread(_tally_check, config)
     if normalized == "purchase summary":
         return await asyncio.to_thread(_purchase_summary, attachments, config, source)
     if normalized == "stock status":
         return await asyncio.to_thread(_stock_status, config, source)
+    if normalized.startswith("stock goldiee mail "):
+        return await asyncio.to_thread(_stock_goldiee_mail, text, config, source)
     if normalized == "dms stock":
         return await asyncio.to_thread(_dms_stock, config, source)
     if normalized.startswith("unloading slip "):
         date_text = re.sub(r"^unloading\s+slip\s+", "", text.strip(), flags=re.IGNORECASE).strip()
         return await asyncio.to_thread(_unloading_slip, date_text, config, source)
     return CommandResult("Command not recognized.")
+
+
+def _tally_check(config: dict) -> CommandResult:
+    from .tally_context import ensure_configured_company, get_tally_config
+
+    result = ensure_configured_company(get_tally_config(config))
+    loaded = ", ".join(result["loaded_companies"]) or "none"
+    others = ", ".join(result["other_companies"]) or "none"
+    return CommandResult(
+        "Tally company lock OK."
+        f"\nConfigured company: {result['company_name']}"
+        f"\nLoaded companies: {loaded}"
+        f"\nOther companies: {others}"
+    )
 
 
 def _purchase_summary(attachments: list[Path], config: dict, source: str) -> CommandResult:
@@ -92,6 +112,40 @@ def _stock_status(config: dict, source: str) -> CommandResult:
         "note": f"Rows: {result['rows']}; MRP rows: {result['mrp_rows']}; Sell rows: {result['sell_rows']}",
     })
     return CommandResult(f"Stock status created with {result['rows']} rows.", [output])
+
+
+def _stock_goldiee_mail(text: str, config: dict, source: str) -> CommandResult:
+    from .stock_aging_report import build_stock_aging_report, parse_report_date
+
+    match = re.match(
+        r"^\s*stock\s+goldiee\s+mail\s+(.+?)\s+to\s+(.+?)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return CommandResult("Use: `stock goldiee mail <fromdate> to <todate>`")
+    from_date = parse_report_date(match.group(1))
+    to_date = parse_report_date(match.group(2))
+    result = build_stock_aging_report(config, from_date, to_date)
+    output = Path(result["output"])
+    append_log(config["paths"]["processing_log"], {
+        "status": "stock_goldiee_mail",
+        "source": source,
+        "output_file": str(output),
+        "note": (
+            f"Rows: {result['rows']}; Missing codes: {len(result['missing_codes'])}; "
+            f"Missing weights: {len(result['missing_weights'])}; Stock source: {result['stock_source']}"
+        ),
+    })
+    message = (
+        f"Goldiee stock aging report created for {result['from_date']} to {result['to_date']} "
+        f"with {result['rows']} rows."
+    )
+    if result["missing_codes"]:
+        message += "\n\nItems without Tally item code:\n- " + "\n- ".join(result["missing_codes"][:20])
+    if result["missing_weights"]:
+        message += f"\n\nWeights could not be parsed for {len(result['missing_weights'])} item(s)."
+    return CommandResult(message, [output])
 
 
 def _dms_stock(config: dict, source: str) -> CommandResult:

@@ -3,31 +3,38 @@ from __future__ import annotations
 import hashlib
 import html
 import json
-import re
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from .settings import PROJECT_ROOT
-from .settings import load_config
+from .tally_context import TallyContextError, clean_tally_xml, ensure_configured_company
+from .tally_context import get_tally_config, tally_request
 
 
 CACHE_DIR = PROJECT_ROOT / "data" / "item_master_cache"
-TALLY_URL = "http://localhost:9000"
 
 
 def get_item_master(force_refresh: bool = False, company_name: str | None = None) -> dict[str, Any]:
-    company_name = company_name or load_config().get("tally", {}).get("company_name", "")
+    tally_config = get_tally_config()
+    company_name = company_name or tally_config.company_name
     if not company_name:
         raise RuntimeError("No Tally company_name is configured.")
     try:
+        if company_name != tally_config.company_name:
+            raise TallyContextError(
+                f"Requested company {company_name!r} does not match configured company "
+                f"{tally_config.company_name!r}."
+            )
+        ensure_configured_company(tally_config)
         items = fetch_item_names(company_name)
         today_cache = CACHE_DIR / _cache_filename(date.today().isoformat(), company_name, items)
         if today_cache.exists() and not force_refresh:
             return _read_cache(today_cache, source="today_cache")
         return _save_cache(items, company_name)
+    except TallyContextError:
+        raise
     except Exception as exc:
         latest = _latest_cache(company_name=company_name)
         if not latest:
@@ -41,6 +48,7 @@ def get_item_master(force_refresh: bool = False, company_name: str | None = None
 
 
 def fetch_item_names(company_name: str) -> list[str]:
+    tally_config = get_tally_config()
     request_xml = (
         "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
         "<TYPE>Collection</TYPE><ID>Goldiee Bot Stock Items</ID></HEADER><BODY><DESC>"
@@ -50,9 +58,7 @@ def fetch_item_names(company_name: str) -> list[str]:
         "<TYPE>Stock Item</TYPE><FETCH>Name</FETCH>"
         "</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
     ).encode("utf-8")
-    request = urllib.request.Request(TALLY_URL, data=request_xml, headers={"Content-Type": "text/xml"})
-    response = urllib.request.urlopen(request, timeout=30).read().decode("utf-8", errors="ignore")
-    response = re.sub(r"&#(?:[0-8]|1[0-9]|2[0-9]|3[0-1]);", "", response)
+    response = clean_tally_xml(tally_request(request_xml, tally_config, timeout=30))
     root = ET.fromstring(response)
     names = {
         node.attrib.get("NAME", "").strip()

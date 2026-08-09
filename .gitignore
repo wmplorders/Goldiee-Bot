@@ -3,10 +3,12 @@ __pycache__/
 .venv/
 node_modules/
 config.json
+.env
 gmail_credentials.json
 data/token.json
 data/gmail_credentials.json
 data/dms_storage_state.json
+data/*.json
 data/dms-browser-profile/
 data/item_master_cache/
 data/state.json

@@ -13,11 +13,19 @@
     "edge_profile_dir": "edge-profile"
   },
   "tally": {
-    "company_name": "Goenka Tradeventures 2025-2026 (Goldiee)"
+    "company_name": "Goenka Tradeventures 2025-2026 (Goldiee)",
+    "data_path": "\\\\server\\Tally Server Data",
+    "company_folder": "100011",
+    "http_url": "http://localhost:9000",
+    "require_exact_company": true,
+    "close_other_companies": true
   },
   "dms": {
     "company_id": 10456,
     "company_name": "Goldiee Group"
+  },
+  "stock_aging": {
+    "template": "C:\\Users\\goenk\\Downloads\\Stock Aging Report.xlsx"
   },
   "paths": {
     "downloads": "downloads",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import html
 import re
-import urllib.request
 import xml.etree.ElementTree as ET
 from io import StringIO
 from datetime import datetime
@@ -12,6 +11,9 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.table import Table, TableStyleInfo
+
+from .tally_context import current_company_static_variables, ensure_configured_company
+from .tally_context import get_tally_config, tally_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,22 +61,51 @@ def udf_value(node, local_name: str):
 
 
 def fetch_item_batch_summary(item: str) -> list[list[str]]:
+    tally_config = get_tally_config()
     body = (
         "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
         "<TYPE>Data</TYPE><ID>Item Batch Summary</ID></HEADER><BODY><DESC>"
         "<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:ASCII</SVEXPORTFORMAT>"
+        f"{current_company_static_variables(tally_config)}"
         f"<SVStockItemName>{html.escape(item)}</SVStockItemName>"
         f"<StockItemName>{html.escape(item)}</StockItemName>"
         "<EXPLODEFLAG>Yes</EXPLODEFLAG></STATICVARIABLES></DESC></BODY></ENVELOPE>"
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        "http://localhost:9000", data=body, headers={"Content-Type": "text/xml"}
     )
-    data = urllib.request.urlopen(request, timeout=25).read().decode("utf-8", errors="ignore")
+    data = tally_request(body, tally_config, timeout=25)
     return list(csv.reader(StringIO(data)))
 
 
+def refresh_source_xml() -> None:
+    tally_config = get_tally_config()
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
+    stock_body = (
+        "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
+        "<TYPE>Collection</TYPE><ID>Goldiee Bot Stock Items Conversion</ID></HEADER><BODY><DESC>"
+        "<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+        f"{current_company_static_variables(tally_config)}</STATICVARIABLES>"
+        "<TDL><TDLMESSAGE><COLLECTION NAME=\"Goldiee Bot Stock Items Conversion\">"
+        "<TYPE>Stock Item</TYPE>"
+        "<FETCH>Name,Parent,BaseUnits,AdditionalUnits,Denominator,Conversion,ClosingBalance</FETCH>"
+        "</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+    )
+    STOCK_XML.write_text(tally_request(stock_body, tally_config, timeout=60), encoding="utf-8")
+
+    voucher_body = (
+        "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
+        "<TYPE>Collection</TYPE><ID>Goldiee Bot Inventory Voucher Batches</ID></HEADER><BODY><DESC>"
+        "<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+        f"{current_company_static_variables(tally_config)}</STATICVARIABLES>"
+        "<TDL><TDLMESSAGE><COLLECTION NAME=\"Goldiee Bot Inventory Voucher Batches\">"
+        "<TYPE>Voucher</TYPE>"
+        "<FETCH>Date,AllInventoryEntries.*,BatchAllocations.*</FETCH>"
+        "</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+    )
+    VOUCHER_XML.write_text(tally_request(voucher_body, tally_config, timeout=120), encoding="utf-8")
+
+
 def build(output: Path) -> dict:
+    ensure_configured_company()
+    refresh_source_xml()
     stock_root = ET.fromstring(clean_xml(STOCK_XML))
     items = []
     item_meta = {}

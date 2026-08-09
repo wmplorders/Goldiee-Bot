@@ -37,12 +37,17 @@ def main() -> int:
     monitor = sub.add_parser("monitor", help="Run WhatsApp command listener and Gmail monitor")
 
     whatsapp_login = sub.add_parser("whatsapp-login", help="Open Edge for WhatsApp QR/login")
+    sub.add_parser("tally-check", help="Verify the configured Tally company is loaded")
     item_master = sub.add_parser("item-master", help="Warm the complete Tally Stock Item Master cache")
     stock_status = sub.add_parser("stock-status", help="Fetch Tally batch/PTR/MRP stock status")
+    stock_goldiee_mail = sub.add_parser("stock-goldiee-mail", help="Create Goldiee stock ageing mail report")
+    stock_goldiee_mail.add_argument("from_date", help="Date like 01-07-2026 or 01/07/2026")
+    stock_goldiee_mail.add_argument("to_date", help="Date like 08-07-2026 or 08/07/2026")
     dms_authorize = sub.add_parser("dms-authorize", help="Authorize the browserless DMS client")
     dms_stock = sub.add_parser("dms-stock", help="Fetch current DMS stock without visible UI")
     unloading_slip = sub.add_parser("unloading-slip", help="Create unloading slip for a purchase date")
     unloading_slip.add_argument("date", help="Date like 30-05-2026 or 30/05/2026")
+    unloading_slip.add_argument("invoices", nargs="*", help="Optional invoice numbers to include")
 
     args = parser.parse_args()
     config = load_config()
@@ -80,6 +85,21 @@ def main() -> int:
         send_to_configured_group(config, "Goldiee Purchase Bot is connected.")
         return 0
 
+    if args.command == "tally-check":
+        from .tally_context import ensure_configured_company, get_tally_config
+
+        tally_config = get_tally_config(config)
+        result = ensure_configured_company(tally_config)
+        print(f"Configured company: {result['company_name']}")
+        print(f"Loaded companies: {', '.join(result['loaded_companies']) or 'none'}")
+        print(f"Other companies: {', '.join(result['other_companies']) or 'none'}")
+        if result["data_path"]:
+            print(f"Configured data path: {result['data_path']}")
+        if result["company_folder"]:
+            print(f"Configured company folder: {result['company_folder']}")
+        print("Tally company lock OK.")
+        return 0
+
     if args.command == "item-master":
         from .tally_item_master import get_item_master
 
@@ -100,6 +120,29 @@ def main() -> int:
             "note": f"Rows: {result['rows']}; MRP rows: {result['mrp_rows']}; Sell rows: {result['sell_rows']}",
         })
         print(f"Created {result['output']}")
+        return 0
+
+    if args.command == "stock-goldiee-mail":
+        from .stock_aging_report import build_stock_aging_report, parse_report_date
+
+        result = build_stock_aging_report(
+            config,
+            parse_report_date(args.from_date),
+            parse_report_date(args.to_date),
+        )
+        append_log(config["paths"]["processing_log"], {
+            "status": "stock_goldiee_mail",
+            "source": "manual",
+            "output_file": result["output"],
+            "note": (
+                f"Rows: {result['rows']}; Missing codes: {len(result['missing_codes'])}; "
+                f"Missing weights: {len(result['missing_weights'])}; Stock source: {result['stock_source']}"
+            ),
+        })
+        print(f"Created {result['output']}")
+        print(f"Rows: {result['rows']}")
+        print(f"Missing item codes: {len(result['missing_codes'])}")
+        print(f"Missing weights: {len(result['missing_weights'])}")
         return 0
 
     if args.command == "dms-authorize":
@@ -123,7 +166,7 @@ def main() -> int:
     if args.command == "unloading-slip":
         from .unloading_slip import build_unloading_slip, parse_user_date
 
-        result = build_unloading_slip(parse_user_date(args.date))
+        result = build_unloading_slip(parse_user_date(args.date), args.invoices)
         append_log(config["paths"]["processing_log"], {
             "status": "unloading_slip",
             "source": "manual",

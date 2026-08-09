@@ -70,7 +70,7 @@ def current_stock_text(stock_rows: list[dict[str, Any]]) -> str:
     return ", ".join(pieces)
 
 
-def find_purchase_summaries(target_date: datetime) -> list[Path]:
+def find_purchase_summaries(target_date: datetime, invoice_filter: set[str] | None = None) -> list[Path]:
     candidates = []
     seen = set()
     for folder in SUMMARY_SEARCH_DIRS:
@@ -83,12 +83,16 @@ def find_purchase_summaries(target_date: datetime) -> list[Path]:
             if resolved in seen:
                 continue
             seen.add(resolved)
-            if workbook_has_purchase_date(path, target_date):
+            if workbook_has_purchase_date(path, target_date, invoice_filter):
                 candidates.append(path)
     return sorted(candidates, key=lambda p: p.name.casefold())
 
 
-def workbook_has_purchase_date(path: Path, target_date: datetime) -> bool:
+def workbook_has_purchase_date(
+    path: Path,
+    target_date: datetime,
+    invoice_filter: set[str] | None = None,
+) -> bool:
     try:
         wb = load_workbook(path, data_only=True, read_only=True)
     except Exception:
@@ -98,9 +102,14 @@ def workbook_has_purchase_date(path: Path, target_date: datetime) -> bool:
     ws = wb["Purchase Summary"]
     headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
     date_col = headers.get("Date")
+    invoice_col = headers.get("Invoice No.")
     if not date_col:
         return False
     for row in range(2, ws.max_row + 1):
+        if not same_date(ws.cell(row, date_col).value, target_date):
+            continue
+        if invoice_filter and str(ws.cell(row, invoice_col).value or "").strip() not in invoice_filter:
+            continue
         if same_date(ws.cell(row, date_col).value, target_date):
             return True
     return False
@@ -118,7 +127,11 @@ def same_date(value: Any, target_date: datetime) -> bool:
     return False
 
 
-def load_combined_purchase_rows(paths: list[Path], target_date: datetime) -> list[dict[str, Any]]:
+def load_combined_purchase_rows(
+    paths: list[Path],
+    target_date: datetime,
+    invoice_filter: set[str] | None = None,
+) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for path in paths:
         wb = load_workbook(path, data_only=True, read_only=True)
@@ -126,6 +139,8 @@ def load_combined_purchase_rows(paths: list[Path], target_date: datetime) -> lis
         headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
         for row in range(2, ws.max_row + 1):
             if not same_date(ws.cell(row, headers["Date"]).value, target_date):
+                continue
+            if invoice_filter and str(ws.cell(row, headers["Invoice No."]).value or "").strip() not in invoice_filter:
                 continue
             item = str(ws.cell(row, headers["ITEM"]).value or "").strip()
             cases = float(ws.cell(row, headers["Case"]).value or 0)
@@ -148,7 +163,11 @@ def load_combined_purchase_rows(paths: list[Path], target_date: datetime) -> lis
     return sorted(grouped.values(), key=lambda r: (r["item"].casefold(), r["mrp"], r["ptr"]))
 
 
-def collect_invoice_numbers(paths: list[Path], target_date: datetime) -> list[str]:
+def collect_invoice_numbers(
+    paths: list[Path],
+    target_date: datetime,
+    invoice_filter: set[str] | None = None,
+) -> list[str]:
     invoice_numbers = set()
     for path in paths:
         wb = load_workbook(path, data_only=True, read_only=True)
@@ -159,10 +178,13 @@ def collect_invoice_numbers(paths: list[Path], target_date: datetime) -> list[st
         if not date_col or not invoice_col:
             continue
         for row in range(2, ws.max_row + 1):
-            if same_date(ws.cell(row, date_col).value, target_date):
-                invoice_no = str(ws.cell(row, invoice_col).value or "").strip()
-                if invoice_no:
-                    invoice_numbers.add(invoice_no)
+            if not same_date(ws.cell(row, date_col).value, target_date):
+                continue
+            invoice_no = str(ws.cell(row, invoice_col).value or "").strip()
+            if invoice_filter and invoice_no not in invoice_filter:
+                continue
+            if invoice_no:
+                invoice_numbers.add(invoice_no)
     return sorted(invoice_numbers)
 
 
@@ -204,20 +226,24 @@ def classify_row(purchase_row: dict[str, Any], stock_by_item: dict[str, list[dic
     return "red", stock_text
 
 
-def build_unloading_slip(target_date: datetime) -> dict[str, Any]:
-    purchase_files = find_purchase_summaries(target_date)
+def build_unloading_slip(target_date: datetime, invoices: list[str] | None = None) -> dict[str, Any]:
+    invoice_filter = {invoice.strip() for invoice in invoices or [] if invoice.strip()}
+    purchase_files = find_purchase_summaries(target_date, invoice_filter or None)
     if not purchase_files:
+        invoice_text = f" for invoices {', '.join(sorted(invoice_filter))}" if invoice_filter else ""
         raise FileNotFoundError(
-            f"No purchase summaries found for {target_date.strftime('%d-%m-%Y')} in processed/download folders."
+            f"No purchase summaries found for {target_date.strftime('%d-%m-%Y')}{invoice_text} "
+            "in processed/download folders."
         )
-    purchase_rows = load_combined_purchase_rows(purchase_files, target_date)
-    invoice_numbers = collect_invoice_numbers(purchase_files, target_date)
+    purchase_rows = load_combined_purchase_rows(purchase_files, target_date, invoice_filter or None)
+    invoice_numbers = collect_invoice_numbers(purchase_files, target_date, invoice_filter or None)
     stock_path = default_stock_output_path()
     build_stock_status(stock_path)
     stock_by_item = load_stock(stock_path)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    base = OUTPUT_DIR / f"Unloading Slip {target_date.strftime('%d-%m-%Y')}"
+    suffix = " " + " ".join(invoice_numbers) if invoice_filter else ""
+    base = OUTPUT_DIR / f"Unloading Slip {target_date.strftime('%d-%m-%Y')}{suffix}"
     xlsx_path = base.with_suffix(".xlsx")
     pdf_path = base.with_suffix(".pdf")
 
@@ -272,7 +298,12 @@ def build_unloading_slip(target_date: datetime) -> dict[str, Any]:
         timestamp = datetime.now().strftime("%H-%M-%S")
         xlsx_path = base.with_name(f"{base.name} {timestamp}").with_suffix(".xlsx")
         wb.save(xlsx_path)
-    write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers)
+    try:
+        write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers)
+    except PermissionError:
+        timestamp = datetime.now().strftime("%H-%M-%S")
+        pdf_path = base.with_name(f"{base.name} {timestamp}").with_suffix(".pdf")
+        write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers)
     return {
         "xlsx": str(xlsx_path),
         "pdf": str(pdf_path),
@@ -285,12 +316,15 @@ def build_unloading_slip(target_date: datetime) -> dict[str, Any]:
 
 
 def format_slip(ws) -> None:
-    widths = {"A": 8, "B": 52, "C": 10, "D": 10, "E": 12, "F": 12, "G": 12, "H": 48}
+    widths = {"A": 5, "B": 34, "C": 7, "D": 7, "E": 8, "F": 10, "G": 10, "H": 28}
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
+    ws.row_dimensions[1].height = 18
+    ws.row_dimensions[2].height = 18
     for row in ws.iter_rows(min_row=3):
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
+        ws.row_dimensions[row[0].row].height = 18
         row[0].alignment = Alignment(horizontal="center", vertical="center")
         row[2].number_format = "0.00"
         row[3].number_format = "0.00"
@@ -309,26 +343,26 @@ def write_pdf(path: Path, rows: list[tuple[list[Any], str]], target_date: dateti
     from reportlab.pdfgen import canvas
 
     page_width, page_height = landscape(A4)
-    margin = 12
-    title_height = 28
-    table_top = page_height - margin - title_height - 4
+    margin = 8
+    title_height = 20
+    table_top = page_height - margin - title_height
     table_bottom = margin
     table_height = table_top - table_bottom
     row_count = len(rows) + 1
-    row_height = table_height / max(row_count, 1)
-    font_size = max(4.4, min(7.0, row_height * 0.42))
-    header_font_size = max(5.0, min(7.5, row_height * 0.46))
-    line_height = font_size + 1.1
+    row_height = min(12.5, table_height / max(row_count, 1))
+    font_size = max(4.0, min(5.8, row_height * 0.45))
+    header_font_size = max(4.5, min(6.2, row_height * 0.48))
+    line_height = font_size + 0.8
 
     columns = [
-        ("S. No.", 0.045),
-        ("Item Name", 0.305),
-        ("MRP", 0.065),
-        ("Cases", 0.065),
-        ("PCS", 0.075),
-        ("", 0.065),
-        ("", 0.065),
-        ("Current Stock", 0.315),
+        ("S. No.", 0.035),
+        ("Item Name", 0.32),
+        ("MRP", 0.052),
+        ("Cases", 0.052),
+        ("PCS", 0.058),
+        ("", 0.07),
+        ("", 0.07),
+        ("Current Stock", 0.343),
     ]
     usable_width = page_width - 2 * margin
     col_widths = [usable_width * fraction for _, fraction in columns]
@@ -345,11 +379,11 @@ def write_pdf(path: Path, rows: list[tuple[list[Any], str]], target_date: dateti
             text = text[:-1]
         return text + ellipsis if text else ellipsis
 
-    pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawCentredString(page_width / 2, page_height - margin - 11, f"Unloading Slip {target_date.strftime('%d-%m-%Y')}")
-    pdf.setFont("Helvetica", 7)
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawCentredString(page_width / 2, page_height - margin - 8, f"Unloading Slip {target_date.strftime('%d-%m-%Y')}")
+    pdf.setFont("Helvetica", 6.5)
     invoice_text = "Invoices: " + (", ".join(invoice_numbers) if invoice_numbers else "Not found")
-    pdf.drawString(margin, page_height - margin - 23, fit_line(invoice_text, page_width - 2 * margin, 7))
+    pdf.drawString(margin, page_height - margin - 18, fit_line(invoice_text, page_width - 2 * margin, 6.5))
 
     def wrap_text(text: str, width: float, size: float, max_lines: int) -> list[str]:
         words = str(text or "").split()
@@ -380,9 +414,9 @@ def write_pdf(path: Path, rows: list[tuple[list[Any], str]], target_date: dateti
         size = header_font_size if bold else font_size
         font = "Helvetica-Bold" if bold else "Helvetica"
         pdf.setFont(font, size)
-        max_lines = max(1, int((height - 3) // line_height))
+        max_lines = max(1, int((height - 2) // line_height))
         lines = wrap_text(str(text or ""), width - 4, size, max_lines)
-        start_y = y + height - size - 2
+        start_y = y + height - size - 1.4
         for idx, line in enumerate(lines):
             line_y = start_y - idx * line_height
             if align == "center":
@@ -415,7 +449,7 @@ def write_pdf(path: Path, rows: list[tuple[list[Any], str]], target_date: dateti
             pdf.rect(margin, y, usable_width, row_height, stroke=0, fill=1)
         pdf.setFillColor(colors.white if status == "total" else colors.black)
         if status == "total":
-            rendered = ["", "TOTAL CASES", "", f"{values[3]:g}", "", "", "", ""]
+            rendered = ["", "TOTAL CASES", "", f"{values[3]:.2f}", "", "", "", ""]
         else:
             rendered = [
                 values[0],
@@ -440,8 +474,9 @@ def write_pdf(path: Path, rows: list[tuple[list[Any], str]], target_date: dateti
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("date")
+    parser.add_argument("invoices", nargs="*")
     args = parser.parse_args()
-    result = build_unloading_slip(parse_user_date(args.date))
+    result = build_unloading_slip(parse_user_date(args.date), args.invoices)
     print(result)
 
 
