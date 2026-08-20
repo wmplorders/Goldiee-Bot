@@ -11,6 +11,7 @@ Local bot for WhatsApp purchase commands, preparing purchase-summary Excel files
   - `stock goldiee mail <fromdate> to <todate>`
   - `dms stock`
   - `unloading slip <date>`
+  - `delivery vouchers`
 - Gmail account: `goenkatradeventures@gmail.com`
 - Sender watched: `information@goldiee.com`
 - Start date: `2026-06-08`
@@ -53,6 +54,32 @@ sent to the configured `Goldiee Automation` group.
 
 For `purchase summary`, attach the Excel to the command message or send the Excel shortly
 before the command in the same chat.
+
+For `delivery vouchers`, attach the transport-details Excel to the command message, send it
+shortly before the command in the same chat, or put it in the bot's `uploads` folder. If no
+WhatsApp Excel is available, the bot uses the newest Excel in `uploads`. The bot reads only
+`Sheet1`, uses headers on row 10, uses the first `Despatch Date` in column B, skips invalid
+rows while reporting them, and replies with one combined PDF containing one A4 page per
+valid row.
+
+## Delivery Vouchers
+
+WhatsApp command:
+
+```text
+delivery vouchers
+```
+
+Manual command:
+
+```bat
+.\.venv\Scripts\python.exe -m src.main delivery-vouchers "C:\path\to\Transport Details.xlsx"
+```
+
+The generated PDF is saved in `processed`. `Eway No.` and `Remarks` may be blank; all other
+mapped fields are mandatory. The final compact voucher template is isolated in
+`src\delivery_voucher_template.py` so its layout can be changed independently of Excel and
+WhatsApp processing.
 
 ## Manual Processing
 

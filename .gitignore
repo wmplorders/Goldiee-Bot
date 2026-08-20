@@ -13,11 +13,13 @@ data/dms-browser-profile/
 data/item_master_cache/
 data/state.json
 downloads/*
+uploads/*
 processed/*
 logs/*
 edge-profile/*
 tallyerr.log
 tallyhttp.log
 !downloads/.keep
+!uploads/.keep
 !processed/.keep
 !logs/.keep

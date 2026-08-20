@@ -10,6 +10,17 @@ from .purchase_processor import build_summary, default_output_filename
 from .state import append_log
 
 
+DELIVERY_VOUCHER_COMMANDS = {
+    "delivery voucher",
+    "delivery vouchers",
+    "generate voucher",
+    "generate vouchers",
+    "generate delivery vouchers",
+    "generate challan",
+    "generate challans",
+}
+
+
 @dataclass
 class CommandResult:
     message: str
@@ -20,12 +31,18 @@ def recognized_command(text: str) -> bool:
     normalized = " ".join(text.casefold().split())
     return (
         normalized == "purchase summary"
+        or normalized in DELIVERY_VOUCHER_COMMANDS
         or normalized == "tally check"
         or normalized == "stock status"
         or normalized.startswith("stock goldiee mail ")
         or normalized == "dms stock"
         or normalized.startswith("unloading slip ")
     )
+
+
+def uses_excel_attachment(text: str) -> bool:
+    normalized = " ".join(text.casefold().split())
+    return normalized == "purchase summary" or normalized in DELIVERY_VOUCHER_COMMANDS
 
 
 async def run_command(
@@ -39,6 +56,8 @@ async def run_command(
         return await asyncio.to_thread(_tally_check, config)
     if normalized == "purchase summary":
         return await asyncio.to_thread(_purchase_summary, attachments, config, source)
+    if normalized in DELIVERY_VOUCHER_COMMANDS:
+        return await asyncio.to_thread(_delivery_vouchers, attachments, config, source)
     if normalized == "stock status":
         return await asyncio.to_thread(_stock_status, config, source)
     if normalized.startswith("stock goldiee mail "):
@@ -49,6 +68,48 @@ async def run_command(
         date_text = re.sub(r"^unloading\s+slip\s+", "", text.strip(), flags=re.IGNORECASE).strip()
         return await asyncio.to_thread(_unloading_slip, date_text, config, source)
     return CommandResult("Command not recognized.")
+
+
+def _delivery_vouchers(attachments: list[Path], config: dict, source: str) -> CommandResult:
+    from .delivery_vouchers import build_delivery_vouchers, default_output_filename
+
+    excels = [path for path in attachments if path.suffix.casefold() in {".xlsx", ".xlsm"}]
+    if not excels:
+        uploads = Path(config["paths"]["uploads"])
+        uploads.mkdir(parents=True, exist_ok=True)
+        excels = sorted(
+            (
+                path
+                for path in uploads.iterdir()
+                if path.is_file() and path.suffix.casefold() in {".xlsx", ".xlsm"}
+            ),
+            key=lambda path: path.stat().st_mtime,
+        )
+    if not excels:
+        return CommandResult(
+            "I could not find the transport-details Excel. Send it on WhatsApp or place it in the "
+            "bot's `uploads` folder, then send `delivery vouchers`."
+        )
+
+    source_path = excels[-1]
+    output = Path(config["paths"]["processed"]) / default_output_filename(source_path)
+    result = build_delivery_vouchers(source_path, output)
+    errors = result["errors"]
+    append_log(config["paths"]["processing_log"], {
+        "status": "delivery_vouchers",
+        "source": source,
+        "input_rows": result["generated"] + len(errors),
+        "output_rows": result["generated"],
+        "output_file": result["output"],
+        "note": f"Generated: {result['generated']}; Row errors: {len(errors)}",
+    })
+    message = f"Created {result['generated']} delivery voucher(s) in one PDF."
+    if errors:
+        shown = errors[:20]
+        message += "\n\nRows not generated:\n- " + "\n- ".join(shown)
+        if len(errors) > len(shown):
+            message += f"\n- ...and {len(errors) - len(shown)} more row error(s)."
+    return CommandResult(message, [Path(result["output"])])
 
 
 def _tally_check(config: dict) -> CommandResult:

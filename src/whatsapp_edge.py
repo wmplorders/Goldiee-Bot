@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Iterable
 
-from .command_router import recognized_command, run_command
+from .command_router import recognized_command, run_command, uses_excel_attachment
 from .state import load_state, save_state
 
 
@@ -169,7 +169,7 @@ class WhatsAppEdge:
             try:
                 result = await run_command(text, command_files, self.config)
                 await self._send_to_chat_unlocked(chat_name, result.message, result.attachments)
-                if text.casefold().strip() == "purchase summary" and result.attachments:
+                if uses_excel_attachment(text) and result.attachments:
                     self.recent_attachments[chat_name].clear()
             except Exception as exc:
                 await self._send_to_chat_unlocked(chat_name, f"Could not complete `{text.strip()}`: {exc}")

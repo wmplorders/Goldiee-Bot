@@ -21,7 +21,8 @@ def load_config() -> dict[str, Any]:
 
 
 def _resolve_paths(config: dict[str, Any]) -> dict[str, Any]:
-    for key in ("downloads", "processed", "logs"):
+    config["paths"].setdefault("uploads", "uploads")
+    for key in ("downloads", "uploads", "processed", "logs"):
         config["paths"][key] = str((PROJECT_ROOT / config["paths"][key]).resolve())
     for key in ("state", "processing_log"):
         config["paths"][key] = str((PROJECT_ROOT / config["paths"][key]).resolve())

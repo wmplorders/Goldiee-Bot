@@ -48,6 +48,12 @@ def main() -> int:
     unloading_slip = sub.add_parser("unloading-slip", help="Create unloading slip for a purchase date")
     unloading_slip.add_argument("date", help="Date like 30-05-2026 or 30/05/2026")
     unloading_slip.add_argument("invoices", nargs="*", help="Optional invoice numbers to include")
+    delivery_vouchers = sub.add_parser(
+        "delivery-vouchers",
+        help="Create one combined delivery-voucher PDF from a transport-details Excel",
+    )
+    delivery_vouchers.add_argument("excel", type=Path)
+    delivery_vouchers.add_argument("--output", type=Path)
 
     args = parser.parse_args()
     config = load_config()
@@ -175,6 +181,25 @@ def main() -> int:
         })
         print(f"Created {result['xlsx']}")
         print(f"Created {result['pdf']}")
+        return 0
+
+    if args.command == "delivery-vouchers":
+        from .delivery_vouchers import build_delivery_vouchers, default_output_filename
+
+        output = args.output or Path(config["paths"]["processed"]) / default_output_filename(args.excel)
+        result = build_delivery_vouchers(args.excel, output)
+        append_log(config["paths"]["processing_log"], {
+            "status": "delivery_vouchers",
+            "source": "manual",
+            "input_rows": result["generated"] + len(result["errors"]),
+            "output_rows": result["generated"],
+            "output_file": result["output"],
+            "note": f"Generated: {result['generated']}; Row errors: {len(result['errors'])}",
+        })
+        print(f"Created {result['output']}")
+        print(f"Generated vouchers: {result['generated']}")
+        for error in result["errors"]:
+            print(error)
         return 0
 
     return 1

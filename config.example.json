@@ -29,6 +29,7 @@
   },
   "paths": {
     "downloads": "downloads",
+    "uploads": "uploads",
     "processed": "processed",
     "logs": "logs",
     "state": "data/state.json",
