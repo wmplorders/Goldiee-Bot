@@ -11,6 +11,9 @@ from .tally_context import get_tally_config, tally_request, clean_tally_xml, cur
 PROMPT = ('Are any billed goods still not dispatched? Reply with the full bill numbers '
           'separated by commas or new lines, or reply `none`. Reply `cancel` to cancel.')
 
+# Both ledgers are verified members of Sales Accounts in the Goldiee company.
+SUPPORTED_SALES_LEDGERS = {'Sales', 'Exempt Sales'}
+
 
 def parse_bills(text):
     if text.strip().casefold() in {'none', 'no', 'nil', '0'}:
@@ -45,8 +48,8 @@ def fetch_additions(bills):
             raise ValueError(f'{bill}: cancelled or optional voucher.')
         entries = v.findall('ALLINVENTORYENTRIES.LIST')
         sales_ledgers = [t.text(a, 'LEDGERNAME') for i in entries for a in i.findall('ACCOUNTINGALLOCATIONS.LIST')]
-        if not entries or not sales_ledgers or any(x != 'Sales' for x in sales_ledgers):
-            raise ValueError(f'{bill}: not a supported sales invoice (Sales ledger required).')
+        if not entries or any(not i.findall('ACCOUNTINGALLOCATIONS.LIST') for i in entries) or not sales_ledgers or any(x not in SUPPORTED_SALES_LEDGERS for x in sales_ledgers):
+            raise ValueError(f'{bill}: unsupported inventory accounting ledger(s): {", ".join(sales_ledgers) or "missing"}. Expected Sales or Exempt Sales.')
         for item in entries:
             name = t.text(item, 'STOCKITEMNAME')
             qty, unit = t.parse_qty(t.text(item, 'ACTUALQTY'))

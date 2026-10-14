@@ -9,6 +9,23 @@ from src.command_router import run_command
 
 
 class UndispatchedTests(unittest.TestCase):
+    def test_exempt_sales_accepted_but_purchase_rejected(self):
+        from src.tally_context import TallyConfig
+        xml = '''<ENVELOPE><VOUCHER><VOUCHERNUMBER>EX-57</VOUCHERNUMBER>
+        <ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>
+        <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Roli</STOCKITEMNAME>
+        <ACTUALQTY>10 PCS</ACTUALQTY><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <ACCOUNTINGALLOCATIONS.LIST><LEDGERNAME>Exempt Sales</LEDGERNAME></ACCOUNTINGALLOCATIONS.LIST>
+        <BATCHALLOCATIONS.LIST><BATCHNAME>43.00</BATCHNAME><ACTUALQTY>10 PCS</ACTUALQTY>
+        <UDF:UDF_AA_BATCH_MRP_RATE>67</UDF:UDF_AA_BATCH_MRP_RATE></BATCHALLOCATIONS.LIST>
+        </ALLINVENTORYENTRIES.LIST></VOUCHER></ENVELOPE>'''
+        with patch('src.undispatched.get_tally_config', return_value=TallyConfig('Test')), patch('src.undispatched.ensure_configured_company'):
+            with patch('src.undispatched.tally_request', return_value=xml):
+                result = fetch_additions(['EX-57'])
+                self.assertEqual(result[0]['qty'], 10)
+            with patch('src.undispatched.tally_request', return_value=xml.replace('Exempt Sales','Purchase')), self.assertRaisesRegex(ValueError,'unsupported inventory accounting'):
+                fetch_additions(['EX-57'])
+
     def test_list_and_none(self):
         self.assertEqual(parse_bills('26-27/A-1, 26-27/A-2\n26-27/A-1'), ['26-27/A-1', '26-27/A-2'])
         self.assertEqual(parse_bills('none'), [])
