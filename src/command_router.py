@@ -50,6 +50,7 @@ async def run_command(
     attachments: list[Path],
     config: dict,
     source: str = "whatsapp",
+    undispatched_bills: list[str] | None = None,
 ) -> CommandResult:
     normalized = " ".join(text.casefold().split())
     if normalized == "tally check":
@@ -65,8 +66,11 @@ async def run_command(
     if normalized == "dms stock":
         return await asyncio.to_thread(_dms_stock, config, source)
     if normalized.startswith("unloading slip "):
+        if undispatched_bills is None:
+            from .undispatched import PROMPT
+            return CommandResult(PROMPT)
         date_text = re.sub(r"^unloading\s+slip\s+", "", text.strip(), flags=re.IGNORECASE).strip()
-        return await asyncio.to_thread(_unloading_slip, date_text, config, source)
+        return await asyncio.to_thread(_unloading_slip, date_text, config, source, undispatched_bills)
     return CommandResult("Command not recognized.")
 
 
@@ -226,10 +230,10 @@ def _dms_stock(config: dict, source: str) -> CommandResult:
     return CommandResult(f"DMS stock created with {result['rows']} rows.", [output])
 
 
-def _unloading_slip(date_text: str, config: dict, source: str) -> CommandResult:
+def _unloading_slip(date_text: str, config: dict, source: str, undispatched_bills: list[str]) -> CommandResult:
     from .unloading_slip import build_unloading_slip, parse_user_date
 
-    result = build_unloading_slip(parse_user_date(date_text))
+    result = build_unloading_slip(parse_user_date(date_text), undispatched_bills=undispatched_bills)
     attachments = [Path(result["xlsx"]), Path(result["pdf"])]
     append_log(config["paths"]["processing_log"], {
         "status": "unloading_slip",
@@ -239,6 +243,7 @@ def _unloading_slip(date_text: str, config: dict, source: str) -> CommandResult:
     })
     invoices = ", ".join(result["invoice_numbers"]) or "not found"
     return CommandResult(
-        f"Unloading slip created for {date_text}. Invoices combined: {invoices}.",
+        f"Unloading slip created for {date_text}. Invoices combined: {invoices}."
+        + (" Stock added back from: " + ", ".join(undispatched_bills) + ". Tally unchanged." if undispatched_bills else ""),
         attachments,
     )

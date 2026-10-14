@@ -48,6 +48,7 @@ def main() -> int:
     unloading_slip = sub.add_parser("unloading-slip", help="Create unloading slip for a purchase date")
     unloading_slip.add_argument("date", help="Date like 30-05-2026 or 30/05/2026")
     unloading_slip.add_argument("invoices", nargs="*", help="Optional invoice numbers to include")
+    unloading_slip.add_argument("--undispatched", nargs="*", default=None, help="Undispatched sales bills; pass without values for none")
     delivery_vouchers = sub.add_parser(
         "delivery-vouchers",
         help="Create one combined delivery-voucher PDF from a transport-details Excel",
@@ -172,7 +173,15 @@ def main() -> int:
     if args.command == "unloading-slip":
         from .unloading_slip import build_unloading_slip, parse_user_date
 
-        result = build_unloading_slip(parse_user_date(args.date), args.invoices)
+        from .undispatched import PROMPT, parse_bills
+        bills = args.undispatched
+        if bills is None:
+            answer = input(PROMPT + "\n> ")
+            if answer.strip().casefold() == "cancel":
+                print("Unloading slip cancelled.")
+                return 0
+            bills = parse_bills(answer)
+        result = build_unloading_slip(parse_user_date(args.date), args.invoices, bills)
         append_log(config["paths"]["processing_log"], {
             "status": "unloading_slip",
             "source": "manual",

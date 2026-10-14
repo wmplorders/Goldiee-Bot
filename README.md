@@ -179,3 +179,58 @@ data\state.json
 
 WhatsApp Web is intentionally configured to use Microsoft Edge with its own profile folder: `edge-profile`.
 If WhatsApp is logged out, Edge will stay open for QR scanning.
+# Undispatched Bills in Unloading Slips
+
+Send `unloading slip 13-10-2026`. The bot asks whether any billed goods remain
+undispatched. Reply in the same chat with full sales bill numbers separated by
+commas or new lines, `none`, or `cancel`. A new unloading request replaces the
+pending request in that chat. Pending requests are cleared when the bot restarts;
+send the command again after a restart. On a validation failure, reply with the
+corrected full list to retry.
+
+The bot validates the bills, exports fresh stock, and adds their actual batch
+quantities to the report only. Tally is not changed. Batch-level MRP and item-master
+case conversions are used. The workbook includes an Undispatched Add-back audit
+sheet. Missing or ambiguous bills, cancelled/optional vouchers, unsupported sales
+ledgers, missing MRP/conversions, and stock-export errors stop generation.
+
+The CLI asks the same question. For unattended use, supply
+`--undispatched 26-27/SG-TI-340 26-27/SG-TI-341`, or `--undispatched` without values
+to explicitly select none. Add-backs are never carried over to the next request.
+
+## Local Web Dashboard
+
+Run `start_web.bat` and open `http://localhost:9001`. No Node installation or
+additional Python packages are needed beyond the existing bot requirements.
+The dashboard runs independently of the WhatsApp listener.
+
+Available screens: Purchase (Gmail by received date or uploaded invoice Excel),
+Unloading (purchase invoice selection and undispatched sales bills), Tally/DMS
+stock exports, Delivery Challans, Files & History, and Settings.
+Web company selection is stored in `data/web_settings.json`; it does not alter
+the WhatsApp configuration or Tally's default data path. Select the exact loaded
+Goldiee company in Settings before processing. Web summaries require a fresh
+item-master read rather than silently using an old cache.
+
+Web jobs run serially, and job history is stored in `data/web_jobs`. Tally stock
+exports share a process lock with the updated WhatsApp code. Restart any running
+older bot after updating so it uses the same lock. Interrupted jobs are marked
+failed on dashboard restart. Files are available through the dashboard; web jobs
+do not send WhatsApp messages or mark Gmail messages processed.
+
+For access from another device on your trusted LAN, stop the local web server,
+set `GOLDIEE_WEB_PASSWORD` in the launching environment, then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.web_app --host 0.0.0.0 --port 9001
+```
+
+Open `http://<bot-laptop-IP>:9001` from the other device. Permit the port only on
+the Windows private-network firewall profile. LAN mode requires the password;
+the password is not saved in the repository. This is a local HTTP service, not
+an internet-facing deployment. Use localhost mode when network access is not
+needed. Gmail authorization is performed using the existing `authorize_gmail.bat`
+on the bot laptop, not an unattended web job.
+
+The dashboard currently exposes Tally and DMS stock exports separately; stock
+comparison, aging, and direct purchase import are not part of this first web version.

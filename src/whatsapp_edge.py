@@ -18,6 +18,7 @@ class WhatsAppEdge:
         self.playwright = None
         self.ui_lock = asyncio.Lock()
         self.initialized_chats: set[str] = set()
+        self.pending_unloading: dict[str, str] = {}
         self.recent_attachments: dict[str, deque[Path]] = defaultdict(lambda: deque(maxlen=10))
 
     async def start(self):
@@ -161,14 +162,44 @@ class WhatsAppEdge:
             for path in files:
                 self.recent_attachments[chat_name].append(path)
             text = await self._message_text(message)
+            bills = None
+            is_reply = False
+            from .undispatched import PROMPT, parse_bills
+            if " ".join(text.casefold().split()).startswith("unloading slip "):
+                from .unloading_slip import parse_user_date
+                try:
+                    parse_user_date(re.sub(r"^unloading\s+slip\s+", "", text.strip(), flags=re.I))
+                except ValueError as exc:
+                    await self._send_to_chat_unlocked(chat_name, str(exc))
+                else:
+                    self.pending_unloading[chat_name] = text
+                    await self._send_to_chat_unlocked(chat_name, PROMPT)
+                self._mark_processed(message_id)
+                continue
+            if chat_name in self.pending_unloading and not recognized_command(text):
+                if text.strip().casefold() == "cancel":
+                    self.pending_unloading.pop(chat_name)
+                    await self._send_to_chat_unlocked(chat_name, "Unloading slip cancelled.")
+                    self._mark_processed(message_id)
+                    continue
+                try:
+                    bills = parse_bills(text)
+                except ValueError as exc:
+                    await self._send_to_chat_unlocked(chat_name, str(exc))
+                    self._mark_processed(message_id)
+                    continue
+                text = self.pending_unloading[chat_name]
+                is_reply = True
             if not recognized_command(text):
                 self._mark_processed(message_id)
                 continue
 
             command_files = files or list(self.recent_attachments[chat_name])
             try:
-                result = await run_command(text, command_files, self.config)
+                result = await run_command(text, command_files, self.config, undispatched_bills=bills)
                 await self._send_to_chat_unlocked(chat_name, result.message, result.attachments)
+                if is_reply:
+                    self.pending_unloading.pop(chat_name, None)
                 if uses_excel_attachment(text) and result.attachments:
                     self.recent_attachments[chat_name].clear()
             except Exception as exc:

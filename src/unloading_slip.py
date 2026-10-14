@@ -12,6 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from .settings import PROJECT_ROOT
+from .tally_job_lock import serialized
 from .tally_batch_stock import build as build_stock_status
 from .tally_batch_stock import default_output_path as default_stock_output_path
 
@@ -200,7 +201,7 @@ def load_stock(stock_path: Path) -> dict[str, list[dict[str, Any]]]:
         by_item[item].append(
             {
                 "item": item,
-                "ptr": money_key(ws.cell(row, headers["Batch / PTR"]).value),
+                "ptr": str(ws.cell(row, headers["Batch / PTR"]).value or "").strip(),
                 "mrp": money_key(ws.cell(row, headers["MRP Rate"]).value),
                 "qty": float(ws.cell(row, headers["Closing Qty"]).value or 0),
                 "case_qty": float(ws.cell(row, headers["Closing Case Qty"]).value or 0),
@@ -217,7 +218,7 @@ def classify_row(purchase_row: dict[str, Any], stock_by_item: dict[str, list[dic
     exact = [
         row
         for row in stock_rows
-        if row["mrp"] == purchase_row["mrp"] and row["ptr"] == purchase_row["ptr"]
+        if row["mrp"] == purchase_row["mrp"] and money_key(row["ptr"]) == purchase_row["ptr"]
     ]
     stock_combos = {(row["mrp"], row["ptr"]) for row in stock_rows}
     stock_text = current_stock_text(stock_rows)
@@ -226,7 +227,13 @@ def classify_row(purchase_row: dict[str, Any], stock_by_item: dict[str, list[dic
     return "red", stock_text
 
 
-def build_unloading_slip(target_date: datetime, invoices: list[str] | None = None) -> dict[str, Any]:
+@serialized
+def build_unloading_slip(target_date: datetime, invoices: list[str] | None = None, undispatched_bills: list[str] | None = None) -> dict[str, Any]:
+    from .undispatched import fetch_additions, apply_additions
+    from .tally_batch_stock import STOCK_XML
+
+    bills = list(dict.fromkeys(undispatched_bills or []))
+    additions = fetch_additions(bills) if bills else []
     invoice_filter = {invoice.strip() for invoice in invoices or [] if invoice.strip()}
     purchase_files = find_purchase_summaries(target_date, invoice_filter or None)
     if not purchase_files:
@@ -238,8 +245,13 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
     purchase_rows = load_combined_purchase_rows(purchase_files, target_date, invoice_filter or None)
     invoice_numbers = collect_invoice_numbers(purchase_files, target_date, invoice_filter or None)
     stock_path = default_stock_output_path()
-    build_stock_status(stock_path)
+    stock_result = build_stock_status(stock_path)
+    if stock_result.get("errors"):
+        raise ValueError("Tally stock export has errors; no unloading slip created.")
     stock_by_item = load_stock(stock_path)
+    audit = []
+    if additions:
+        stock_by_item, audit = apply_additions(stock_by_item, additions, STOCK_XML)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     suffix = " " + " ".join(invoice_numbers) if invoice_filter else ""
@@ -251,6 +263,9 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
     ws = wb.active
     ws.title = "Unloading Slip"
     invoice_text = "Invoices: " + (", ".join(invoice_numbers) if invoice_numbers else "Not found")
+    adjustment_note = "Stock includes undispatched bills: " + ", ".join(bills) if bills else ""
+    if adjustment_note:
+        invoice_text += "; " + adjustment_note
     ws.append([invoice_text, "", "", "", "", "", "", ""])
     ws.append(["S. No.", "Item Name", "MRP", "Cases", "PCS", "", "", "Current Stock"])
     ws.merge_cells("A1:H1")
@@ -292,6 +307,18 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
     rows_for_pdf.append((total_values, "total"))
 
     format_slip(ws)
+    if audit:
+        ws.row_dimensions[1].height = 36
+        sheet = wb.create_sheet("Undispatched Add-back")
+        sheet.append([adjustment_note + "; report only, Tally unchanged"])
+        sheet.append(["Bill", "Item", "PTR", "Batch MRP", "Tally PCS before", "Added PCS", "Adjusted PCS", "PCS per Case", "Added Cases"])
+        for entry in audit:
+            sheet.append(entry)
+        sheet.freeze_panes = "A3"
+        sheet.column_dimensions["A"].width = 24
+        sheet.column_dimensions["B"].width = 55
+        for column in "CDEFGHI":
+            sheet.column_dimensions[column].width = 19
     try:
         wb.save(xlsx_path)
     except PermissionError:
@@ -299,11 +326,11 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
         xlsx_path = base.with_name(f"{base.name} {timestamp}").with_suffix(".xlsx")
         wb.save(xlsx_path)
     try:
-        write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers)
+        write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers + ([adjustment_note] if bills else []))
     except PermissionError:
         timestamp = datetime.now().strftime("%H-%M-%S")
         pdf_path = base.with_name(f"{base.name} {timestamp}").with_suffix(".pdf")
-        write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers)
+        write_pdf(pdf_path, rows_for_pdf, target_date, invoice_numbers + ([adjustment_note] if bills else []))
     return {
         "xlsx": str(xlsx_path),
         "pdf": str(pdf_path),
@@ -312,6 +339,7 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
         "invoice_numbers": invoice_numbers,
         "rows": len(purchase_rows),
         "total_cases": total_cases,
+        "undispatched_bills": bills,
     }
 
 

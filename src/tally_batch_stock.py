@@ -14,6 +14,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from .tally_context import current_company_static_variables, ensure_configured_company
 from .tally_context import get_tally_config, tally_request
+from .tally_job_lock import serialized
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,6 +104,7 @@ def refresh_source_xml() -> None:
     VOUCHER_XML.write_text(tally_request(voucher_body, tally_config, timeout=120), encoding="utf-8")
 
 
+@serialized
 def build(output: Path) -> dict:
     ensure_configured_company()
     refresh_source_xml()

@@ -11,6 +11,9 @@ data/dms_storage_state.json
 data/*.json
 data/dms-browser-profile/
 data/item_master_cache/
+data/web_jobs/
+data/*.lock
+outputs/
 data/state.json
 downloads/*
 uploads/*
