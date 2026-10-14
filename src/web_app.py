@@ -54,7 +54,12 @@ def run_job(job):
         r = subprocess.run([sys.executable, '-m', 'src.web_jobs', job['id']], cwd=PROJECT_ROOT,
                            env=env, capture_output=True, text=True, timeout=1800)
         if r.returncode:
-            raise RuntimeError((r.stderr or r.stdout)[-2500:])
+            diagnostic = (r.stderr or r.stdout)[-6000:]
+            job['diagnostic'] = diagnostic
+            last_line = diagnostic.strip().splitlines()[-1]
+            if ': ' in last_line:
+                last_line = last_line.split(': ', 1)[1]
+            raise RuntimeError(last_line)
         result = json.loads(r.stdout.strip().splitlines()[-1])
         job.update(status='completed', detail=result['message'], files=result.get('files', []))
     except Exception as exc:

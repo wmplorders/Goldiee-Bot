@@ -230,7 +230,7 @@ def classify_row(purchase_row: dict[str, Any], stock_by_item: dict[str, list[dic
 @serialized
 def build_unloading_slip(target_date: datetime, invoices: list[str] | None = None, undispatched_bills: list[str] | None = None) -> dict[str, Any]:
     from .undispatched import fetch_additions, apply_additions
-    from .tally_batch_stock import STOCK_XML
+    from .tally_batch_stock import STOCK_XML, VOUCHER_XML
 
     bills = list(dict.fromkeys(undispatched_bills or []))
     additions = fetch_additions(bills) if bills else []
@@ -251,7 +251,7 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
     stock_by_item = load_stock(stock_path)
     audit = []
     if additions:
-        stock_by_item, audit = apply_additions(stock_by_item, additions, STOCK_XML)
+        stock_by_item, audit = apply_additions(stock_by_item, additions, STOCK_XML, VOUCHER_XML)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     suffix = " " + " ".join(invoice_numbers) if invoice_filter else ""
@@ -311,7 +311,7 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
         ws.row_dimensions[1].height = 36
         sheet = wb.create_sheet("Undispatched Add-back")
         sheet.append([adjustment_note + "; report only, Tally unchanged"])
-        sheet.append(["Bill", "Item", "PTR", "Batch MRP", "Tally PCS before", "Added PCS", "Adjusted PCS", "PCS per Case", "Added Cases"])
+        sheet.append(["Bill", "Item", "PTR", "Batch MRP", "Tally PCS before", "Added PCS", "Adjusted PCS", "PCS per Case", "Added Cases", "MRP source"])
         for entry in audit:
             sheet.append(entry)
         sheet.freeze_panes = "A3"
@@ -319,6 +319,7 @@ def build_unloading_slip(target_date: datetime, invoices: list[str] | None = Non
         sheet.column_dimensions["B"].width = 55
         for column in "CDEFGHI":
             sheet.column_dimensions[column].width = 19
+        sheet.column_dimensions['J'].width = 42
     try:
         wb.save(xlsx_path)
     except PermissionError:

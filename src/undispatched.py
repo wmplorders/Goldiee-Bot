@@ -57,8 +57,10 @@ def fetch_additions(bills):
                 amount, batch_unit = t.parse_qty(t.text(batch, 'ACTUALQTY'))
                 mrp = t.udf_value(batch, 'UDF_AA_BATCH_MRP_RATE')
                 ptr = t.text(batch, 'BATCHNAME')
-                if amount <= 0 or batch_unit != unit or not ptr or not isinstance(mrp, (float, int)) or mrp <= 0:
-                    raise ValueError(f'{bill}: missing/invalid batch quantity or MRP for {name}.')
+                if amount <= 0 or batch_unit != unit or not ptr:
+                    raise ValueError(f'{bill}: invalid quantity, unit or batch/PTR for {name} (batch {ptr or "missing"}).')
+                if mrp not in ('', None) and (not isinstance(mrp, (float, int)) or mrp <= 0):
+                    raise ValueError(f'{bill}: invalid batch MRP for {name} (batch {ptr}).')
                 additions.append(dict(bill=bill, item=name, ptr=ptr, mrp=mrp, qty=amount, unit=unit))
                 total += amount
             if abs(total - qty) > .00001:
@@ -66,7 +68,7 @@ def fetch_additions(bills):
     return additions
 
 
-def apply_additions(stock, additions, master_path):
+def apply_additions(stock, additions, master_path, history_path=None):
     stock = copy.deepcopy(stock)
     masters = ET.fromstring(t.clean_xml(master_path))
     factors = {}
@@ -74,8 +76,34 @@ def apply_additions(stock, additions, master_path):
         d, c = t.number(t.text(node, 'DENOMINATOR')), t.number(t.text(node, 'CONVERSION'))
         if isinstance(d, (float, int)) and isinstance(c, (float, int)) and c and d > 0:
             factors[node.attrib['NAME']] = (d / c, t.text(node, 'BASEUNITS'))
+    history = None
     audit = []
-    for a in additions:
+    for original in additions:
+        a = dict(original)
+        mrp_source = 'Sales voucher batch'
+        if a['mrp'] in ('', None):
+            candidates = {float(r['mrp']) for r in stock.get(a['item'], [])
+                          if r['ptr'] == a['ptr'] and r['mrp'] not in ('', None) and float(r['mrp']) > 0}
+            mrp_source = 'Fresh stock: exact item and batch'
+            if not candidates and history_path:
+                if history is None:
+                    history = ET.fromstring(t.clean_xml(history_path, ns=True))
+                for voucher in history.findall('.//VOUCHER'):
+                    if t.text(voucher, 'ISCANCELLED') == 'Yes' or t.text(voucher, 'ISOPTIONAL') == 'Yes':
+                        continue
+                    for item in voucher.findall('ALLINVENTORYENTRIES.LIST'):
+                        if t.text(item, 'STOCKITEMNAME') != a['item']:
+                            continue
+                        for batch in item.findall('BATCHALLOCATIONS.LIST'):
+                            if t.text(batch, 'BATCHNAME') == a['ptr']:
+                                mrp = t.udf_value(batch, 'UDF_AA_BATCH_MRP_RATE')
+                                if isinstance(mrp, (float, int)) and mrp > 0:
+                                    candidates.add(float(mrp))
+                mrp_source = 'Batch history: exact item and batch'
+            if len(candidates) != 1:
+                reason = 'No MRP found' if not candidates else 'Conflicting MRPs: ' + ', '.join(map(str, sorted(candidates)))
+                raise ValueError(f"{a['bill']}: {reason} for {a['item']} / PTR {a['ptr']}. Check this batch in Tally and retry. No slip created.")
+            a['mrp'] = candidates.pop()
         factor, unit = factors.get(a['item'], (0, ''))
         if factor <= 0 or unit != a['unit']:
             raise ValueError('Missing item-master conversion or unit mismatch: ' + a['item'])
@@ -88,5 +116,5 @@ def apply_additions(stock, additions, master_path):
             hits[0]['case_qty'] = hits[0]['qty'] / factor
         else:
             rows.append(dict(item=a['item'], ptr=a['ptr'], mrp=f"{a['mrp']:.2f}", qty=a['qty'], case_qty=a['qty']/factor, pcs_per_case=factor))
-        audit.append([a['bill'], a['item'], a['ptr'], a['mrp'], before, a['qty'], before+a['qty'], factor, a['qty']/factor])
+        audit.append([a['bill'], a['item'], a['ptr'], a['mrp'], before, a['qty'], before+a['qty'], factor, a['qty']/factor, mrp_source])
     return stock, audit

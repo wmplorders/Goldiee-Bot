@@ -98,7 +98,7 @@ def refresh_source_xml() -> None:
         f"{current_company_static_variables(tally_config)}</STATICVARIABLES>"
         "<TDL><TDLMESSAGE><COLLECTION NAME=\"Goldiee Bot Inventory Voucher Batches\">"
         "<TYPE>Voucher</TYPE>"
-        "<FETCH>Date,AllInventoryEntries.*,BatchAllocations.*</FETCH>"
+        "<FETCH>Date,IsCancelled,IsOptional,AllInventoryEntries.*,BatchAllocations.*</FETCH>"
         "</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
     )
     VOUCHER_XML.write_text(tally_request(voucher_body, tally_config, timeout=120), encoding="utf-8")

@@ -42,6 +42,36 @@ class UndispatchedTests(unittest.TestCase):
                 with patch('src.undispatched.tally_request', return_value=xml), self.assertRaises(ValueError):
                     fetch_additions(['A-1'])
 
+    def test_missing_mrp_uses_exact_stock_batch_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'master.xml'
+            p.write_text('<ENVELOPE><STOCKITEM NAME="Hing"><DENOMINATOR>720</DENOMINATOR><CONVERSION>1</CONVERSION><BASEUNITS>PCS</BASEUNITS></STOCKITEM></ENVELOPE>')
+            a=dict(bill='A-1',item='Hing',ptr='43.00',mrp='',qty=200,unit='PCS')
+            stock={'Hing':[dict(ptr='43.00',mrp='60.00',qty=100,case_qty=100/720,pcs_per_case=720)]}
+            result,audit=apply_additions(stock,[a],p)
+            self.assertEqual(result['Hing'][0]['qty'],300)
+            self.assertEqual(audit[0][3],60)
+            self.assertIn('Fresh stock',audit[0][-1])
+            with self.assertRaises(ValueError):
+                apply_additions(stock,[dict(a,ptr='43.0')],p)
+            stock['Hing'].append(dict(stock['Hing'][0],mrp='65.00'))
+            with self.assertRaisesRegex(ValueError,'Conflicting MRPs'):
+                apply_additions(stock,[a],p)
+
+    def test_history_fallback_and_ambiguity(self):
+        with tempfile.TemporaryDirectory() as d:
+            master=Path(d)/'master.xml';history=Path(d)/'history.xml'
+            master.write_text('<ENVELOPE><STOCKITEM NAME="Hing"><DENOMINATOR>720</DENOMINATOR><CONVERSION>1</CONVERSION><BASEUNITS>PCS</BASEUNITS></STOCKITEM></ENVELOPE>')
+            voucher='<VOUCHER><ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Hing</STOCKITEMNAME><BATCHALLOCATIONS.LIST><BATCHNAME>43.00</BATCHNAME><UDF:UDF_AA_BATCH_MRP_RATE>60</UDF:UDF_AA_BATCH_MRP_RATE></BATCHALLOCATIONS.LIST></ALLINVENTORYENTRIES.LIST></VOUCHER>'
+            history.write_text('<ENVELOPE>'+voucher+'</ENVELOPE>')
+            a=dict(bill='A-1',item='Hing',ptr='43.00',mrp='',qty=200,unit='PCS')
+            result,audit=apply_additions({},[a],master,history)
+            self.assertEqual(result['Hing'][0]['mrp'],'60.00')
+            self.assertIn('history',audit[0][-1])
+            history.write_text('<ENVELOPE>'+voucher+voucher.replace('>60<','>65<')+'</ENVELOPE>')
+            with self.assertRaisesRegex(ValueError,'Conflicting MRPs'):
+                apply_additions({},[a],master,history)
+
 
 if __name__ == '__main__':
     unittest.main()

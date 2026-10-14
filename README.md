@@ -234,3 +234,14 @@ on the bot laptop, not an unattended web job.
 
 The dashboard currently exposes Tally and DMS stock exports separately; stock
 comparison, aging, and direct purchase import are not part of this first web version.
+
+The Chat home screen provides action buttons, request/result messages, direct
+file downloads, and retry buttons for failed jobs. Typing a workflow name opens
+its form; the text box is navigation, not an AI assistant. Technical tracebacks
+are available separately from the readable error message.
+
+If an undispatched sales voucher omits batch MRP, the report checks the exact
+item and exact PTR spelling in fresh stock, then freshly exported batch history.
+It uses only a unique positive MRP, never the item-level MRP or a numerically
+similar PTR. Conflicts and missing values block generation. The audit sheet
+records the MRP source for each adjustment.
