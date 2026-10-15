@@ -18,6 +18,7 @@ from .settings import PROJECT_ROOT, load_config
 
 ASSETS = Path(__file__).with_name('web')
 JOBS_DIR = PROJECT_ROOT / 'data' / 'web_jobs'
+CONVERSATIONS_DIR = PROJECT_ROOT / 'data' / 'web_conversations'
 SETTINGS = PROJECT_ROOT / 'data' / 'web_settings.json'
 POOL = ThreadPoolExecutor(max_workers=1)
 LOCK = threading.Lock()
@@ -42,6 +43,36 @@ def save_job(job):
 def jobs():
     with LOCK:
         return sorted([json.loads(p.read_text()) for p in JOBS_DIR.glob('*.json')], key=lambda x:x['created'], reverse=True)[:100]
+
+
+def conversations():
+    CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    with LOCK:
+        result = []
+        for path in CONVERSATIONS_DIR.glob('*.json'):
+            try:
+                result.append(json.loads(path.read_text(encoding='utf-8')))
+            except (OSError, json.JSONDecodeError):
+                continue
+        return sorted(result, key=lambda x:x.get('updated', x.get('created','')), reverse=True)[:200]
+
+
+def save_conversation(conversation):
+    identifier = str(conversation.get('id',''))
+    if not identifier or not all(c in '0123456789abcdef' for c in identifier) or len(identifier) != 32:
+        raise ValueError('Invalid conversation')
+    messages = conversation.get('messages', [])
+    if not isinstance(messages, list) or len(messages) > 250:
+        raise ValueError('Conversation is too large')
+    encoded = json.dumps(conversation, ensure_ascii=False)
+    if len(encoded) > 1_500_000:
+        raise ValueError('Conversation is too large')
+    CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    with LOCK:
+        path = CONVERSATIONS_DIR / (identifier + '.json')
+        temp = path.with_suffix('.tmp')
+        temp.write_text(encoded, encoding='utf-8')
+        temp.replace(path)
 
 
 def run_job(job):
@@ -108,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/state':
                 c = load_config()
                 files = sorted(Path(c['paths']['processed']).glob('*'), key=lambda p:p.stat().st_mtime, reverse=True)
-                return self.reply(200, dict(token=TOKEN, settings=settings(), jobs=jobs(), files=[
+                return self.reply(200, dict(token=TOKEN, settings=settings(), jobs=jobs(), conversations=conversations(), files=[
                     dict(name=p.name, size=p.stat().st_size, modified=datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds'))
                     for p in files if p.is_file() and not p.name.startswith('~$') and p.suffix.lower() in {'.xlsx','.pdf'}][:300]))
             if path == '/api/companies':
@@ -163,6 +194,58 @@ class Handler(BaseHTTPRequestHandler):
                 p.write_bytes(body)
                 return self.reply(200, {'name':name})
             data = json.loads(body)
+            if self.path == '/api/conversations':
+                if data.get('action') == 'create':
+                    now = datetime.now().isoformat(timespec='seconds')
+                    conversation = dict(
+                        id=uuid.uuid4().hex,
+                        title=str(data.get('title') or 'New conversation')[:120],
+                        flow=str(data.get('flow') or '')[:40],
+                        status='active',
+                        created=now,
+                        updated=now,
+                        messages=data.get('messages', [])[:250],
+                        context=data.get('context', {}),
+                    )
+                    save_conversation(conversation)
+                    return self.reply(201, conversation)
+                if data.get('action') == 'save':
+                    conversation = data.get('conversation', {})
+                    conversation['updated'] = datetime.now().isoformat(timespec='seconds')
+                    save_conversation(conversation)
+                    return self.reply(200, conversation)
+                raise ValueError('Unknown conversation action')
+            if self.path == '/api/preview/unloading':
+                from .unloading_slip import parse_user_date, find_purchase_summaries, same_date
+                from openpyxl import load_workbook
+                target = parse_user_date(str(data.get('date','')))
+                paths = find_purchase_summaries(target)
+                records = []
+                seen = set()
+                for path in paths:
+                    workbook = load_workbook(path, read_only=True, data_only=True)
+                    if 'Purchase Summary' not in workbook.sheetnames:
+                        workbook.close()
+                        continue
+                    sheet = workbook['Purchase Summary']
+                    headers = {str(sheet.cell(1,c).value or '').strip():c for c in range(1,sheet.max_column+1)}
+                    invoice_col, date_col, case_col = headers.get('Invoice No.'), headers.get('Date'), headers.get('Case')
+                    if not invoice_col or not date_col or not case_col:
+                        workbook.close()
+                        continue
+                    totals = {}
+                    for row in range(2, sheet.max_row+1):
+                        if same_date(sheet.cell(row,date_col).value, target):
+                            number = str(sheet.cell(row,invoice_col).value or '').strip()
+                            if number:
+                                totals[number] = totals.get(number,0.0) + float(sheet.cell(row,case_col).value or 0)
+                    workbook.close()
+                    for number, cases in totals.items():
+                        if number not in seen:
+                            seen.add(number)
+                            records.append({'invoice':number, 'cases':cases})
+                records.sort(key=lambda x:x['invoice'])
+                return self.reply(200, {'date':target.strftime('%d-%m-%Y'), 'invoices':records, 'total_cases':sum(x['cases'] for x in records)})
             if self.path == '/api/settings':
                 company = str(data.get('company','')).strip()
                 if not company or len(company)>250:

@@ -12,6 +12,7 @@ data/*.json
 data/dms-browser-profile/
 data/item_master_cache/
 data/web_jobs/
+data/web_conversations/
 data/*.lock
 outputs/
 data/state.json

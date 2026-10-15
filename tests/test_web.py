@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from src import web_app, web_jobs
+from src import unloading_slip
 
 
 class WebTests(unittest.TestCase):
@@ -30,6 +32,40 @@ class WebTests(unittest.TestCase):
             web_app.run_job(job)
             self.assertEqual(web_app.jobs()[0]['status'],'failed')
             self.assertIn('Tally offline',web_app.jobs()[0]['detail'])
+
+    def test_conversation_round_trip(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(web_app,'CONVERSATIONS_DIR',Path(d)):
+            conversation={
+                'id':'a'*32,
+                'title':'Unloading Slip',
+                'created':'2026-10-15T09:00:00',
+                'updated':'2026-10-15T09:00:00',
+                'messages':[{'role':'user','type':'text','text':'Unloading Slip'}],
+                'context':{'date':'2026-10-15'},
+            }
+            web_app.save_conversation(conversation)
+            loaded=web_app.conversations()
+            self.assertEqual(len(loaded),1)
+            self.assertEqual(loaded[0]['context']['date'],'2026-10-15')
+
+    def test_conversation_rejects_invalid_id(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(web_app,'CONVERSATIONS_DIR',Path(d)):
+            with self.assertRaises(ValueError):
+                web_app.save_conversation({'id':'../outside','messages':[]})
+
+    def test_summary_search_prefilters_filename_date(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)
+            matching=folder/'SG-1 13-10-2026 Summary.xlsx'
+            unrelated=folder/'Old Export.xlsx'
+            matching.touch()
+            unrelated.touch()
+            with patch.object(unloading_slip,'SUMMARY_SEARCH_DIRS',[folder]), patch.object(
+                unloading_slip,'workbook_has_purchase_date',return_value=True
+            ) as inspect:
+                result=unloading_slip.find_purchase_summaries(datetime(2026,10,13))
+            self.assertEqual(result,[matching])
+            inspect.assert_called_once_with(matching,datetime(2026,10,13),None)
 
 
 if __name__=='__main__':

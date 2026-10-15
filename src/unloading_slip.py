@@ -74,11 +74,20 @@ def current_stock_text(stock_rows: list[dict[str, Any]]) -> str:
 def find_purchase_summaries(target_date: datetime, invoice_filter: set[str] | None = None) -> list[Path]:
     candidates = []
     seen = set()
+    date_tokens = {
+        target_date.strftime("%d-%m-%Y"),
+        target_date.strftime("%Y-%m-%d"),
+        target_date.strftime("%d.%m.%Y"),
+    }
     for folder in SUMMARY_SEARCH_DIRS:
         if not folder.exists():
             continue
         for path in folder.glob("*.xlsx"):
             if path.name.startswith("~$"):
+                continue
+            # Bot output names always carry the invoice date. Filtering before
+            # opening workbooks keeps a preview fast even with years of downloads.
+            if "summary" not in path.stem.casefold() or not any(token in path.stem for token in date_tokens):
                 continue
             resolved = str(path.resolve()).casefold()
             if resolved in seen:
@@ -98,22 +107,24 @@ def workbook_has_purchase_date(
         wb = load_workbook(path, data_only=True, read_only=True)
     except Exception:
         return False
-    if "Purchase Summary" not in wb.sheetnames:
-        return False
-    ws = wb["Purchase Summary"]
-    headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
-    date_col = headers.get("Date")
-    invoice_col = headers.get("Invoice No.")
-    if not date_col:
-        return False
-    for row in range(2, ws.max_row + 1):
-        if not same_date(ws.cell(row, date_col).value, target_date):
-            continue
-        if invoice_filter and str(ws.cell(row, invoice_col).value or "").strip() not in invoice_filter:
-            continue
-        if same_date(ws.cell(row, date_col).value, target_date):
+    try:
+        if "Purchase Summary" not in wb.sheetnames:
+            return False
+        ws = wb["Purchase Summary"]
+        headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
+        date_col = headers.get("Date")
+        invoice_col = headers.get("Invoice No.")
+        if not date_col:
+            return False
+        for row in range(2, ws.max_row + 1):
+            if not same_date(ws.cell(row, date_col).value, target_date):
+                continue
+            if invoice_filter and str(ws.cell(row, invoice_col).value or "").strip() not in invoice_filter:
+                continue
             return True
-    return False
+        return False
+    finally:
+        wb.close()
 
 
 def same_date(value: Any, target_date: datetime) -> bool:

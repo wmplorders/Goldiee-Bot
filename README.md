@@ -204,9 +204,16 @@ Run `start_web.bat` and open `http://localhost:9001`. No Node installation or
 additional Python packages are needed beyond the existing bot requirements.
 The dashboard runs independently of the WhatsApp listener.
 
-Available screens: Purchase (Gmail by received date or uploaded invoice Excel),
-Unloading (purchase invoice selection and undispatched sales bills), Tally/DMS
-stock exports, Delivery Challans, Files & History, and Settings.
+The web interface is a single persistent chat. Its action buttons remain above the
+message box: Purchase Summary, Unloading Slip, Stock Status, DMS Stock, Delivery
+Challans, and Files. Settings stays in the top-right corner. Conversations are
+saved by day in `data/web_conversations` and remain available after a restart.
+
+Each action is a guided conversation. Unloading first previews the purchase
+invoices found for the date, lets the operator select them, asks for any
+undispatched sales bills, and shows a final review card. Tally is not contacted
+until the operator presses `Create Slip` on that card. Long-running jobs keep
+their status in the same conversation and recover after a browser refresh.
 Web company selection is stored in `data/web_settings.json`; it does not alter
 the WhatsApp configuration or Tally's default data path. Select the exact loaded
 Goldiee company in Settings before processing. Web summaries require a fresh
@@ -235,9 +242,9 @@ on the bot laptop, not an unattended web job.
 The dashboard currently exposes Tally and DMS stock exports separately; stock
 comparison, aging, and direct purchase import are not part of this first web version.
 
-The Chat home screen provides action buttons, request/result messages, direct
-file downloads, and retry buttons for failed jobs. Typing a workflow name opens
-its form; the text box is navigation, not an AI assistant. Technical tracebacks
+The chat provides request/result messages, direct file downloads, and retry
+buttons for failed jobs. Typing a workflow name starts the matching guided flow;
+the text box is command navigation, not an AI assistant. Technical tracebacks
 are available separately from the readable error message.
 
 If an undispatched sales voucher omits batch MRP, the report checks the exact

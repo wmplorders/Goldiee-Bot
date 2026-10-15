@@ -1,6 +1,40 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Goldiee | Operations</title><link rel="stylesheet" href="/style.css"></head>
-<body><aside><div class="brand"><span class="mark">G</span><div>GOLDIEE<small>Goenka Tradeventures</small></div></div><nav id="nav"></nav><div class="local"><i></i> Local operations</div></aside>
-<main><header><div><span class="eyebrow">OPERATIONS DESK</span><h1 id="title">Overview</h1></div><button id="check">Check connections</button></header><div class="company"><span>Working company</span><strong id="company">Loading…</strong><button id="change">Change</button></div><div id="notice" role="status"></div><section id="view"></section></main>
-<dialog id="login"><form id="loginform"><h2>Sign in to Goldiee</h2><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button class="primary">Sign in</button><p id="loginerror"></p></form></dialog>
-<script src="/app.js"></script></body></html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Goldiee Assistant</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <aside id="sidebar">
+    <div class="brand"><span class="brand-mark">G</span><div><strong>GOLDIEE</strong><small>Goenka Tradeventures</small></div></div>
+    <button id="newchat" class="new-chat">＋ New conversation</button>
+    <div class="history-title">CONVERSATIONS</div>
+    <div id="history" class="history"></div>
+    <div class="local"><i></i> Local operations</div>
+  </aside>
+  <div id="sidebarshade" class="sidebar-shade"></div>
+  <main>
+    <header>
+      <button id="historytoggle" class="icon-button" title="Conversation history">☰</button>
+      <span class="avatar">G</span>
+      <div class="contact"><strong>Goldiee Assistant</strong><small id="connection">Local operations</small></div>
+      <button id="settingsbutton" class="icon-button settings-button" title="Settings">⚙</button>
+    </header>
+    <div class="company"><span>Working company</span><strong id="company">Loading…</strong></div>
+    <div id="notice" role="status"></div>
+    <section id="chat" class="chat" aria-live="polite"></section>
+    <div class="chat-footer">
+      <div class="quick-actions" id="actions">
+        <button data-flow="purchase">Purchase Summary</button><button data-flow="unloading">Unloading Slip</button>
+        <button data-flow="stock">Stock Status</button><button data-flow="dms">DMS Stock</button>
+        <button data-flow="challans">Delivery Challans</button><button data-flow="files">Files</button>
+      </div>
+      <form id="composer" class="composer">
+        <button type="button" id="attach" class="attach" title="Attach Excel">＋</button>
+        <input id="message" placeholder="Type a response or command…" autocomplete="off" aria-label="Message">
+        <button class="send" title="Send" aria-label="Send">➤</button>
+      </form>
+    </div>
+  </main>
+  <dialog id="settingsdialog"><form id="settingsform"><div class="dialog-head"><h2>Settings</h2><button type="button" class="close" data-close="settingsdialog">×</button></div><label>Working Tally company<input name="company" required list="companies"><datalist id="companies"></datalist></label><div class="button-row"><button type="button" id="loadcompanies">Read loaded companies</button><button class="primary">Save</button></div><button type="button" id="checkconnections">Check connections</button></form></dialog>
+  <dialog id="login"><form id="loginform"><h2>Sign in to Goldiee</h2><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button class="primary">Sign in</button><p id="loginerror"></p></form></dialog>
+  <input type="file" id="hiddenfile" accept=".xlsx,.xlsm" hidden>
+  <script src="/app.js"></script>
+</body></html>
