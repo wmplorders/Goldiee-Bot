@@ -145,33 +145,47 @@ def load_combined_purchase_rows(
     invoice_filter: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    seen_invoices: set[str] = set()
     for path in paths:
         wb = load_workbook(path, data_only=True, read_only=True)
-        ws = wb["Purchase Summary"]
-        headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
-        for row in range(2, ws.max_row + 1):
-            if not same_date(ws.cell(row, headers["Date"]).value, target_date):
-                continue
-            if invoice_filter and str(ws.cell(row, headers["Invoice No."]).value or "").strip() not in invoice_filter:
-                continue
-            item = str(ws.cell(row, headers["ITEM"]).value or "").strip()
-            cases = float(ws.cell(row, headers["Case"]).value or 0)
-            pcs = float(ws.cell(row, headers["QTY"]).value or 0)
-            mapped_item = normalize_item_for_stock(item, cases, pcs)
-            mrp = money_key(ws.cell(row, headers["MRP"]).value)
-            ptr = money_key(ws.cell(row, headers["PTR"]).value)
-            key = (mapped_item, mrp, ptr)
-            if key not in grouped:
-                grouped[key] = {
-                    "item": mapped_item,
-                    "purchase_item": item,
-                    "mrp": mrp,
-                    "ptr": ptr,
-                    "cases": 0.0,
-                    "pcs": 0.0,
-                }
-            grouped[key]["cases"] += cases
-            grouped[key]["pcs"] += pcs
+        try:
+            ws = wb["Purchase Summary"]
+            headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
+            eligible_rows = []
+            file_invoices = set()
+            for row in range(2, ws.max_row + 1):
+                if not same_date(ws.cell(row, headers["Date"]).value, target_date):
+                    continue
+                invoice = str(ws.cell(row, headers["Invoice No."]).value or "").strip()
+                if not invoice or (invoice_filter and invoice not in invoice_filter):
+                    continue
+                eligible_rows.append((row, invoice))
+                file_invoices.add(invoice)
+            accepted_invoices = file_invoices - seen_invoices
+            for row, invoice in eligible_rows:
+                if invoice not in accepted_invoices:
+                    continue
+                item = str(ws.cell(row, headers["ITEM"]).value or "").strip()
+                cases = float(ws.cell(row, headers["Case"]).value or 0)
+                pcs = float(ws.cell(row, headers["QTY"]).value or 0)
+                mapped_item = normalize_item_for_stock(item, cases, pcs)
+                mrp = money_key(ws.cell(row, headers["MRP"]).value)
+                ptr = money_key(ws.cell(row, headers["PTR"]).value)
+                key = (mapped_item, mrp, ptr)
+                if key not in grouped:
+                    grouped[key] = {
+                        "item": mapped_item,
+                        "purchase_item": item,
+                        "mrp": mrp,
+                        "ptr": ptr,
+                        "cases": 0.0,
+                        "pcs": 0.0,
+                    }
+                grouped[key]["cases"] += cases
+                grouped[key]["pcs"] += pcs
+            seen_invoices.update(accepted_invoices)
+        finally:
+            wb.close()
     return sorted(grouped.values(), key=lambda r: (r["item"].casefold(), r["mrp"], r["ptr"]))
 
 

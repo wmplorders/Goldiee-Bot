@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+from openpyxl import Workbook
+
 from src import web_app, web_jobs
 from src import unloading_slip
 
@@ -66,6 +68,25 @@ class WebTests(unittest.TestCase):
                 result=unloading_slip.find_purchase_summaries(datetime(2026,10,13))
             self.assertEqual(result,[matching])
             inspect.assert_called_once_with(matching,datetime(2026,10,13),None)
+
+    def test_combined_rows_do_not_count_duplicate_invoice_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths=[]
+            for folder_name in ('processed','downloads'):
+                folder=Path(d)/folder_name
+                folder.mkdir()
+                path=folder/'SG-1 19-10-2026 Summary.xlsx'
+                wb=Workbook()
+                ws=wb.active
+                ws.title='Purchase Summary'
+                ws.append(['ITEM','PTR','MRP','Case','QTY','Invoice No.','Date'])
+                ws.append(['TEST ITEM',10,20,635,6350,'SG-1','19-10-2026'])
+                wb.save(path)
+                paths.append(path)
+            rows=unloading_slip.load_combined_purchase_rows(paths,datetime(2026,10,19))
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]['cases'],635)
+            self.assertEqual(rows[0]['pcs'],6350)
 
 
 if __name__=='__main__':
