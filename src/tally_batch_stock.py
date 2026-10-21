@@ -45,6 +45,13 @@ def number(value):
         return value
 
 
+def batch_sort_key(value):
+    value = str(value or "").strip()
+    if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", value):
+        return (0, float(value))
+    return (1, value.casefold())
+
+
 def parse_qty(value: str) -> tuple[float, str]:
     match = re.match(r"\s*([-+]?[0-9,.]+)\s+([^=]+)", value or "")
     if not match:
@@ -191,7 +198,7 @@ def build(output: Path) -> dict:
     rows.sort(
         key=lambda row: (
             str(row[0]).casefold(),
-            float(row[1]) if re.match(r"^[-+]?\d+(\.\d+)?$", str(row[1])) else str(row[1]),
+            batch_sort_key(row[1]),
         )
     )
     write_workbook(output, rows, errors, len(items))

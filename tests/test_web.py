@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from openpyxl import Workbook
 
-from src import web_app, web_jobs
+from src import tally_batch_stock, web_app, web_jobs
 from src import unloading_slip
 
 
@@ -87,6 +87,13 @@ class WebTests(unittest.TestCase):
             self.assertEqual(len(rows),1)
             self.assertEqual(rows[0]['cases'],635)
             self.assertEqual(rows[0]['pcs'],6350)
+
+    def test_batch_sort_handles_numeric_and_text_ptrs(self):
+        values=['15.00','New Batch','9.5','','15.0A']
+        self.assertEqual(
+            sorted(values,key=tally_batch_stock.batch_sort_key),
+            ['9.5','15.00','','15.0A','New Batch'],
+        )
 
 
 if __name__=='__main__':
