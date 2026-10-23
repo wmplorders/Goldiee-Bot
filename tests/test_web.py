@@ -95,6 +95,28 @@ class WebTests(unittest.TestCase):
             ['9.5','15.00','','15.0A','New Batch'],
         )
 
+    def test_unloading_stock_ignores_sold_out_batches(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'stock.xlsx'
+            wb=Workbook()
+            ws=wb.active
+            ws.title='Tally Batch Stock'
+            ws.append([
+                'Stock Item','Batch / PTR','MRP Rate','Closing Qty',
+                'Closing Case Qty','PCS per Case',
+            ])
+            for ptr,mrp,qty,cases in [
+                ('150.00',178,0,0),('156.00',185,0,0),
+                ('162.00',193,0,0),('168.00',200,0,0),
+                ('175.00',208,360,30),('190.00',227,900,75),
+            ]:
+                ws.append(['TURMERIC POWDER 500g.',ptr,mrp,qty,cases,12])
+            wb.save(path)
+            stock=unloading_slip.load_stock(path)
+            rows=stock['TURMERIC POWDER 500g.']
+            self.assertEqual([row['mrp'] for row in rows],['208.00','227.00'])
+            self.assertEqual(unloading_slip.current_stock_text(rows),'Rs. 208.00 - 30 case, Rs. 227.00 - 75 case')
+
 
 if __name__=='__main__':
     unittest.main()

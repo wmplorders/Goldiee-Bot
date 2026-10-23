@@ -216,24 +216,32 @@ def collect_invoice_numbers(
 
 def load_stock(stock_path: Path) -> dict[str, list[dict[str, Any]]]:
     wb = load_workbook(stock_path, data_only=True, read_only=True)
-    ws = wb["Tally Batch Stock"]
-    headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
-    by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in range(2, ws.max_row + 1):
-        item = str(ws.cell(row, headers["Stock Item"]).value or "").strip()
-        if not item:
-            continue
-        by_item[item].append(
-            {
-                "item": item,
-                "ptr": str(ws.cell(row, headers["Batch / PTR"]).value or "").strip(),
-                "mrp": money_key(ws.cell(row, headers["MRP Rate"]).value),
-                "qty": float(ws.cell(row, headers["Closing Qty"]).value or 0),
-                "case_qty": float(ws.cell(row, headers["Closing Case Qty"]).value or 0),
-                "pcs_per_case": float(ws.cell(row, headers["PCS per Case"]).value or 0) or None,
-            }
-        )
-    return by_item
+    try:
+        ws = wb["Tally Batch Stock"]
+        headers = {str(ws.cell(1, col).value or "").strip(): col for col in range(1, ws.max_column + 1)}
+        by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in range(2, ws.max_row + 1):
+            item = str(ws.cell(row, headers["Stock Item"]).value or "").strip()
+            if not item:
+                continue
+            qty = float(ws.cell(row, headers["Closing Qty"]).value or 0)
+            # Tally retains historical batches after they are fully sold. They are
+            # not current stock and must not affect the displayed stock or matching.
+            if abs(qty) < 0.00001:
+                continue
+            by_item[item].append(
+                {
+                    "item": item,
+                    "ptr": str(ws.cell(row, headers["Batch / PTR"]).value or "").strip(),
+                    "mrp": money_key(ws.cell(row, headers["MRP Rate"]).value),
+                    "qty": qty,
+                    "case_qty": float(ws.cell(row, headers["Closing Case Qty"]).value or 0),
+                    "pcs_per_case": float(ws.cell(row, headers["PCS per Case"]).value or 0) or None,
+                }
+            )
+        return by_item
+    finally:
+        wb.close()
 
 
 def classify_row(purchase_row: dict[str, Any], stock_by_item: dict[str, list[dict[str, Any]]]) -> tuple[str, str]:
