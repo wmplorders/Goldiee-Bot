@@ -150,6 +150,7 @@ def _purchase_summary(attachments: list[Path], config: dict, source: str) -> Com
         new_items.update(result["new_items"])
         if result["item_master_warning"]:
             warnings.add(result["item_master_warning"])
+        warnings.update(result.get("scheme_confirmations", []))
         append_log(config["paths"]["processing_log"], {
             "status": "processed",
             "source": source,

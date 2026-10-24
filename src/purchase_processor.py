@@ -4,6 +4,7 @@ import argparse
 import re
 from collections import OrderedDict
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,110 @@ def _is_item_row(item: str) -> bool:
     return bool(normalized) and normalized != "total"
 
 
+def _scheme_source_rows(ws) -> list[dict[str, Any]]:
+    markers: list[tuple[int, int]] = []
+    for row in range(1, (ws.max_row or 1) + 1):
+        for column in range(1, (ws.max_column or 1) + 1):
+            if _clean_header(ws.cell(row, column).value) == "scheme item":
+                markers.append((row, column))
+
+    rows: list[dict[str, Any]] = []
+    for marker_index, (marker_row, marker_col) in enumerate(markers):
+        end_row = markers[marker_index + 1][0] - 1 if marker_index + 1 < len(markers) else ws.max_row
+        for row in range(marker_row + 1, end_row + 1):
+            item = str(ws.cell(row, marker_col + 3).value or "").strip()
+            if not _is_item_row(item):
+                continue
+            rows.append(
+                {
+                    "item": item,
+                    "hsn": str(ws.cell(row, marker_col + 8).value or "").strip(),
+                    "invoice_mrp": ws.cell(row, marker_col + 15).value,
+                    "case_ptr": _as_float(ws.cell(row, marker_col + 17).value),
+                    "case": _as_float(ws.cell(row, marker_col + 19).value),
+                    "case_qty": _as_float(ws.cell(row, marker_col + 20).value),
+                    "unit": str(ws.cell(row, marker_col + 23).value or "").strip(),
+                    "case_billing_rate": _as_float(ws.cell(row, marker_col + 25).value),
+                    "amount": _as_float(ws.cell(row, marker_col + 27).value),
+                    "discount": _as_float(ws.cell(row, marker_col + 29).value),
+                }
+            )
+    return rows
+
+
+def _scheme_records(source_rows: list[dict[str, Any]], invoice_no: str, invoice_date: str) -> list[dict[str, Any]]:
+    if not source_rows:
+        return []
+    from .tally_scheme_items import resolve_scheme_items
+
+    details = resolve_scheme_items([row["item"] for row in source_rows])
+    grouped: OrderedDict[tuple[str, str, str, str, str], dict[str, Any]] = OrderedDict()
+    for source in source_rows:
+        item = source["item"]
+        if source["unit"].casefold() != "car":
+            raise ValueError(
+                f"Scheme item {item!r} uses unsupported unit {source['unit']!r}; expected CAR (Case)."
+            )
+        if source["case"] <= 0 or source["case_qty"] <= 0:
+            raise ValueError(f"Scheme item {item!r} has no valid Case quantity in the invoice.")
+        if abs(source["case"] - source["case_qty"]) > 0.00001:
+            raise ValueError(
+                f"Scheme item {item!r} has inconsistent Case and CAR quantities: "
+                f"{source['case']} and {source['case_qty']}."
+            )
+        item_details = details[item]
+        conversion = Decimal(str(item_details["pcs_per_case"]))
+        case_ptr = Decimal(str(source["case_ptr"]))
+        case_rate = Decimal(str(source["case_billing_rate"]))
+        if case_ptr <= 0 or case_rate < 0:
+            raise ValueError(f"Scheme item {item!r} has invalid PTR or Billing Rate in the invoice.")
+        ptr_per_piece = (case_ptr / conversion).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        billing_rate = (case_rate / conversion).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        matching = [
+            combination
+            for combination in item_details["combinations"]
+            if Decimal(combination[0]) == ptr_per_piece
+        ]
+        matching = list(dict.fromkeys(matching))
+        if not matching:
+            raise ValueError(
+                f"Scheme item {item!r}: calculated PTR {ptr_per_piece:.2f} per PCS does not exist "
+                "in Tally. Ask the user for PTR, MRP, Sell Rate and Purchase Rate per PCS."
+            )
+        if len(matching) > 1:
+            options = ", ".join(
+                f"PTR {ptr} / MRP {mrp:.2f} / Sell {sell:.2f}" for ptr, mrp, sell in matching
+            )
+            raise ValueError(
+                f"Scheme item {item!r}: multiple Tally combinations match calculated PTR "
+                f"{ptr_per_piece:.2f}: {options}. Ask the user to select one."
+            )
+        ptr, mrp, sell_rate = matching[0]
+        key = (item, ptr, str(mrp), str(sell_rate), str(billing_rate))
+        if key not in grouped:
+            grouped[key] = {
+                "ptr": ptr,
+                "mrp": float(mrp),
+                "sell_rate": float(sell_rate),
+                "item": item,
+                "case": 0.0,
+                "qty": 0.0,
+                "billing_rate": float(billing_rate),
+                "discount": 0.0,
+                "amount": 0.0,
+                "invoice_no": invoice_no,
+                "date": invoice_date,
+                "status": f"SCHEME ITEM - CONFIRM PTR {ptr}",
+                "is_scheme": True,
+            }
+        record = grouped[key]
+        record["case"] += source["case"]
+        record["qty"] += float(Decimal(str(source["case_qty"])) * conversion)
+        record["amount"] += source["amount"]
+        record["discount"] += source["discount"]
+    return list(grouped.values())
+
+
 def build_summary(source_path: Path, output_path: Path | None = None) -> dict[str, Any]:
     source_path = Path(source_path)
     if not source_path.exists():
@@ -111,7 +216,11 @@ def build_summary(source_path: Path, output_path: Path | None = None) -> dict[st
         group["discount"] += _as_float(raw_values_ws.cell(row, columns["discount"]).value)
         group["amount"] += _as_float(raw_values_ws.cell(row, columns["amount"]).value)
 
-    records = sorted(groups.values(), key=lambda record: record["item"].casefold())
+    scheme_sources = _scheme_source_rows(raw_values_ws)
+    input_rows += len(scheme_sources)
+    records = list(groups.values())
+    records.extend(_scheme_records(scheme_sources, first_invoice_no, first_invoice_date))
+    records = sorted(records, key=lambda record: record["item"].casefold())
 
     if output_path is None:
         output_path = source_path.with_name(_filename_from_invoice(source_path, first_invoice_no, first_invoice_date))
@@ -148,7 +257,7 @@ def build_summary(source_path: Path, output_path: Path | None = None) -> dict[st
 
     for serial, record in enumerate(records, start=1):
         multiplier = 1.025 if record["item"].casefold().startswith("tea") else 1.03
-        sell_rate = round(record["billing_rate"] * multiplier, 2)
+        sell_rate = record.get("sell_rate", round(record["billing_rate"] * multiplier, 2))
         discount_percent = (
             round((record["discount"] / record["amount"]) * 100, 2) / 100
             if record["amount"]
@@ -167,7 +276,7 @@ def build_summary(source_path: Path, output_path: Path | None = None) -> dict[st
                 discount_percent,
                 record["invoice_no"],
                 record["date"],
-                "NEW ITEM" if record["item"] in new_items else "",
+                "NEW ITEM" if record["item"] in new_items else record.get("status", ""),
             ]
         )
 
@@ -192,6 +301,9 @@ def build_summary(source_path: Path, output_path: Path | None = None) -> dict[st
         "item_master_fetched_at": item_master["fetched_at"],
         "item_master_company_fingerprint": item_master["company_fingerprint"],
         "item_master_warning": item_master.get("warning", ""),
+        "scheme_confirmations": [
+            record["status"] for record in records if record.get("is_scheme") and record.get("status")
+        ],
     }
 
 
@@ -232,7 +344,7 @@ def _format_summary_sheet(ws, new_items: list[str]) -> None:
         ws.cell(row, 6).number_format = "General"
         ws.cell(row, 7).number_format = "0"
         ws.cell(row, 9).number_format = "0.00%"
-        if ws.cell(row, 5).value in new_items:
+        if ws.cell(row, 5).value in new_items or ws.cell(row, 12).value:
             yellow = PatternFill("solid", fgColor="FFF2CC")
             for column in range(1, 13):
                 ws.cell(row, column).fill = yellow

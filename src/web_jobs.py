@@ -61,7 +61,10 @@ def execute(data):
         for source in sources:
             r=build_summary(source,Path(c['paths']['processed'])/default_output_filename(source))
             outputs.append(r['output'])
-            messages.append(f"{r['invoice_no']}: {r['total_case']:g} cases; {r['output_rows']} rows." + (' New items: '+', '.join(r['new_items']) if r['new_items'] else ''))
+            note=f"{r['invoice_no']}: {r['total_case']:g} cases; {r['output_rows']} rows." + (' New items: '+', '.join(r['new_items']) if r['new_items'] else '')
+            if r.get('scheme_confirmations'):
+                note += ' Confirm scheme: ' + '; '.join(r['scheme_confirmations'])
+            messages.append(note)
         message='\n'.join(messages)
     elif kind == 'unloading':
         from .unloading_slip import build_unloading_slip, parse_user_date
