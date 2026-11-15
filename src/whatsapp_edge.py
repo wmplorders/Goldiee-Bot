@@ -162,6 +162,19 @@ class WhatsAppEdge:
             for path in files:
                 self.recent_attachments[chat_name].append(path)
             text = await self._message_text(message)
+            from .sales_compare import has_pending
+            scope = 'whatsapp:' + chat_name
+            is_compare = text.strip().lower().startswith('compare ')
+            if is_compare or (has_pending(scope) and not recognized_command(text)):
+                try:
+                    if is_compare:
+                        self.pending_unloading.pop(chat_name, None)
+                    result = await run_command(text, [], self.config, comparison_scope=scope)
+                    await self._send_to_chat_unlocked(chat_name, result.message, result.attachments)
+                except Exception as exc:
+                    await self._send_to_chat_unlocked(chat_name, f'Comparison: {exc}')
+                self._mark_processed(message_id)
+                continue
             bills = None
             is_reply = False
             from .undispatched import PROMPT, parse_bills

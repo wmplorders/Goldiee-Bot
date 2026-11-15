@@ -36,6 +36,7 @@ function friendlyDetail(job){const lines=String(job?.detail||'').trim().split('\
 function controlsHtml(m,index){
   if(!m.controls)return '';
   const disabled=m.disabled?'disabled':'';
+  if(m.type==='compare_invoices')return `<div class="controls"><div class="invoice-list">${m.options.map(o=>`<label class="invoice-option"><input class="compare-check" type="checkbox" value="${esc(o.value)}" ${(m.selected||[]).includes(o.value)?'checked':''} ${disabled}><span>${esc(o.label)}</span></label>`).join('')}</div><div class="control-buttons"><button class="primary" data-compare-select ${disabled}>Continue</button><button data-cancel ${disabled}>Cancel</button></div></div>`;
   if(m.type==='choice')return `<div class="controls control-buttons">${m.options.map(o=>`<button ${disabled} data-answer="${esc(o.value)}" data-label="${esc(o.label)}">${esc(o.label)}</button>`).join('')}</div>`;
   if(m.type==='date')return `<div class="controls"><div class="control-buttons"><button ${disabled} data-answer="${today()}" data-label="Today">Today</button><button ${disabled} data-answer="${yesterday()}" data-label="Yesterday">Yesterday</button><button ${disabled} data-show-date>Choose date</button></div><form class="date-control" data-date-form hidden><input type="date" value="${today()}" required ${disabled}><button class="primary" ${disabled}>Continue</button></form></div>`;
   if(m.type==='invoices')return `<div class="controls"><div class="invoice-list">${m.invoices.map((x,i)=>`<label class="invoice-option"><input class="invoice-check" type="checkbox" value="${esc(x.invoice)}" data-cases="${Number(x.cases)||0}" ${disabled} checked><span>${esc(x.invoice)}</span><strong>${Number(x.cases).toFixed(2)} cases</strong></label>`).join('')}</div><div class="control-buttons"><button class="primary" data-invoices ${disabled}>Continue</button></div></div>`;
@@ -48,7 +49,7 @@ function controlsHtml(m,index){
 function jobHtml(m){
   const j=jobById(m.jobId)||{status:'queued',detail:'Waiting in queue',files:[]};
   const retry=j.status==='failed'?`<button data-retry="${esc(j.id)}">Retry</button>`:'';
-  const again=['completed','failed'].includes(j.status)?`<button data-start="${esc(m.flow)}">Create another</button>`:'';
+  const again=['completed','failed'].includes(j.status)&&!j.comparison?`<button data-start="${esc(m.flow)}">Create another</button>`:'';
   return `<div class="sender">Goldiee ${statusLabel(j.status)}</div><div class="bubble-text">${esc(friendlyDetail(j))}</div><div class="job-files">${(j.files||[]).map(link).join('')}</div>${j.diagnostic?`<details><summary>Technical details</summary><pre>${esc(j.diagnostic)}</pre></details>`:''}<div class="controls control-buttons">${retry}${again}</div>`;
 }
 function renderMessage(m,index){
@@ -81,14 +82,25 @@ async function syncJobConversations(){
   for(const c of state.conversations){
     const jm=[...c.messages].reverse().find(m=>m.type==='job');if(!jm)continue;
     const j=jobById(jm.jobId);if(!j)continue;
+    if(c.flow==='compare'&&j.status==='completed'){
+      c.context.appliedJobs=c.context.appliedJobs||[];
+      if(!c.context.appliedJobs.includes(j.id)){
+        c.context.appliedJobs.push(j.id);c.context.compareWaiting=Boolean(j.comparison);
+        c.status=j.comparison?'active':'completed';
+        if(j.comparison)c.messages.push(assistant(j.comparison.multiple?'Select the invoices to include.':'Choose your response.',{type:j.comparison.multiple?'compare_invoices':'choice',controls:true,options:j.comparison.options}));
+        await api('/api/conversations',{action:'save',conversation:c});
+      }
+      continue;
+    }
     if(['completed','failed'].includes(j.status)&&c.status!==j.status){c.status=j.status;c.updated=j.finished||c.updated;try{await api('/api/conversations',{action:'save',conversation:c})}catch{}}
   }
 }
 
 async function startFlow(flow){
   selectedUpload='';
-  const names={purchase:'Purchase Summary',unloading:'Unloading Slip',stock:'Stock Status',dms:'DMS Stock',challans:'Delivery Challans',files:'Generated Files',connections:'Connection Check'};
+  const names={compare:'Compare Sales',purchase:'Purchase Summary',unloading:'Unloading Slip',stock:'Stock Status',dms:'DMS Stock',challans:'Delivery Challans',files:'Generated Files',connections:'Connection Check'};
   const c=await createConversation(flow,names[flow]||'New conversation',[user(names[flow]||flow)]);
+  if(flow==='compare')return append(assistant('Which customer should I look for?',{type:'text_input',controls:true,placeholder:'Customer name'}));
   if(flow==='purchase')return append(assistant('Where should I take the invoice from?',{type:'choice',controls:true,options:[{label:'Gmail',value:'gmail'},{label:'Upload Excel',value:'upload'}]}));
   if(flow==='unloading')return askDate('Which purchase invoice date should I use?');
   if(flow==='challans')return append(assistant('Upload the transport details Excel workbook.',{type:'upload',controls:true,purpose:'challans'}));
@@ -101,6 +113,10 @@ async function askDate(text){await append(assistant(text,{type:'date',controls:t
 async function chooseAnswer(value,label){
   const c=active(),prompt=[...c.messages].reverse().find(m=>m.controls&&!m.disabled);if(!prompt)return;
   disableLastPrompt();await append(user(label));
+  if(c.flow==='compare'){
+    if(prompt.type==='date')return enqueue({kind:'compare',conversation_id:c.id,text:`compare ${c.context.customer} ${value}`},'compare');
+    return submitCompare(value);
+  }
   if(c.flow==='purchase'&&value==='gmail'){c.context.source='gmail';return askDate('Which email received date should I scan?')}
   if(c.flow==='purchase'&&value==='upload')return append(assistant('Upload the purchase invoice Excel workbook.',{type:'upload',controls:true,purpose:'purchase'}));
   if(c.flow==='purchase'&&prompt.type==='date'){c.context.date=value;return showPurchaseConfirmation()}
@@ -122,7 +138,8 @@ async function selectInvoices(button){
   const c=active();c.context.invoices=checks.map(x=>x.value);c.context.cases=checks.reduce((n,x)=>n+Number(x.dataset.cases),0);disableLastPrompt();
   await append(user(`${checks.length} invoice${checks.length===1?'':'s'} selected`),assistant('Are any billed goods still in the godown?',{type:'choice',controls:true,options:[{label:'None',value:'none'},{label:'Enter bill numbers',value:'bills'}]}));
 }
-async function submitText(form){const value=form.querySelector('textarea').value.trim();if(!value)return;const c=active();disableLastPrompt();if(c.flow==='unloading'){c.context.bills=value;await append(user(value));return showUnloadingConfirmation()}}
+async function submitText(form){const value=form.querySelector('textarea').value.trim();if(!value)return;const c=active();disableLastPrompt();if(c.flow==='compare'){c.context.customer=value;await append(user(value));return askDate('Choose the end date. I will include that date and the preceding six days.')}if(c.flow==='unloading'){c.context.bills=value;await append(user(value));return showUnloadingConfirmation()}}
+async function submitCompare(text){const c=active();c.context.compareWaiting=false;return enqueue({kind:'compare',conversation_id:c.id,text},'compare')}
 async function showPurchaseConfirmation(){const c=active();return showConfirmation('mail',[{label:'Source',value:'Gmail'},{label:'Email received date',value:displayDate(c.context.date)}],'Create Summaries')}
 async function showUnloadingConfirmation(){
   const c=active(),x=c.context,lines=[{label:'Purchase date',value:displayDate(x.date)},{label:'Invoices',value:(x.invoices||[]).join(', ')},{label:'Incoming quantity',value:`${Number(x.cases||0).toFixed(2)} cases`},{label:'Undispatched sales bills',value:x.bills||'None'},{label:'Stock source',value:'Fresh Tally stock'},{label:'Company',value:state.settings.company||'Not configured'}];
@@ -135,7 +152,7 @@ async function changeUnloading(section){
   if(section==='bills')return append(assistant('Are any billed goods still in the godown?',{type:'choice',controls:true,options:[{label:'None',value:'none'},{label:'Enter bill numbers',value:'bills'}]}));
 }
 async function makeChanges(){const c=active();disableLastPrompt();await append(user('Make changes'));if(c.flow==='unloading')return append(assistant('What would you like to change?',{type:'choice',controls:true,options:[{label:'Date',value:'change:date'},{label:'Purchase invoices',value:'change:invoices'},{label:'Undispatched bills',value:'change:bills'}]}));if(c.flow==='purchase')return startFlow('purchase');return append(assistant('Cancel this operation and choose the action again below.'))}
-async function cancelFlow(){disableLastPrompt();const c=active();c.status='cancelled';await append(user('Cancel'),assistant('Cancelled. No operation was started.'))}
+async function cancelFlow(){disableLastPrompt();const c=active();if(c.flow==='compare'&&c.context.compareWaiting){await append(user('Cancel'));return submitCompare('cancel')}c.status='cancelled';await append(user('Cancel'),assistant('Cancelled. No operation was started.'))}
 
 async function confirmJob(){
   const c=active(),kind=c.context.pendingKind;disableLastPrompt();await append(user(c.messages.findLast(m=>m.type==='confirm')?.confirmLabel||'Create'));
@@ -146,7 +163,8 @@ async function confirmJob(){
   await enqueue(request,c.flow);
 }
 async function enqueue(request,flow){
-  try{const j=await api('/api/jobs',request),c=active();c.status='processing';c.context.lastRequest=request;await append({role:'bot',type:'job',jobId:j.id,flow,time:nowTime()})}
+  const c=active();
+  try{const j=await api('/api/jobs',request);c.status='processing';c.context.lastRequest=request;c.messages.push({role:'bot',type:'job',jobId:j.id,flow,time:nowTime()});await api('/api/conversations',{action:'save',conversation:c});renderAll()}
   catch(e){notice(e.message,true);await append(assistant(`I could not start the operation: ${e.message}`))}
 }
 async function retryJob(id){const old=jobById(id),c=active();if(!old)return;await append(user('Retry'));await enqueue({...old.request,conversation_id:c.id},c.flow)}
@@ -162,6 +180,7 @@ async function handleUpload(file){
 }
 
 function wireDynamic(){
+  document.querySelectorAll('[data-compare-select]').forEach(b=>b.onclick=async()=>{const checked=[...b.closest('.bubble').querySelectorAll('.compare-check:checked')];if(!checked.length)return notice('Select at least one invoice.',true);const prompt=[...active().messages].reverse().find(m=>m.controls&&!m.disabled);prompt.selected=checked.map(x=>x.value);disableLastPrompt();await append(user(checked.map(x=>x.value).join(', ')));await submitCompare(checked.map(x=>x.value).join(','))});
   document.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>startFlow(b.dataset.start));
   document.querySelectorAll('[data-answer]').forEach(b=>b.onclick=()=>chooseAnswer(b.dataset.answer,b.dataset.label));
   document.querySelectorAll('[data-show-date]').forEach(b=>b.onclick=()=>{b.closest('.controls').querySelector('[data-date-form]').hidden=false;b.hidden=true});
@@ -181,7 +200,7 @@ function closeSidebar(){$('#sidebar').classList.remove('open');$('#sidebarshade'
 
 $('#actions').onclick=e=>{const b=e.target.closest('[data-flow]');if(b)startFlow(b.dataset.flow)};
 $('#newchat').onclick=()=>{activeId='';renderAll();closeSidebar()};
-$('#composer').onsubmit=e=>{e.preventDefault();const input=$('#message'),value=input.value.trim();if(!value)return;input.value='';const flow=parseCommand(value);if(flow)startFlow(flow);else createConversation('chat','Question',[user(value),assistant('I can help with Purchase Summary, Unloading Slip, Stock Status, DMS Stock, Delivery Challans, or generated Files. Choose a button below to begin.')],{}).then(c=>{c.status='completed';saveActive()})};
+$('#composer').onsubmit=async e=>{e.preventDefault();const input=$('#message'),value=input.value.trim();if(!value)return;input.value='';if(/^compare\s/i.test(value)){await createConversation('compare','Compare Sales',[user(value)]);return submitCompare(value)}const c=active();if(c?.flow==='compare'&&c.context.compareWaiting){disableLastPrompt();await append(user(value));return submitCompare(value)}if(c?.flow==='compare'&&c.status==='processing')return notice('Please wait for the current comparison step.',true);const p=c&&[...c.messages].reverse().find(m=>m.controls&&!m.disabled);if(c?.flow==='compare'&&p?.type==='text_input'){c.context.customer=value;disableLastPrompt();await append(user(value));return askDate('Choose the end date, including the preceding six days.')}const flow=parseCommand(value);if(flow)startFlow(flow);else createConversation('chat','Question',[user(value),assistant('Choose an action below to begin.')],{}).then(c=>{c.status='completed';saveActive()})};
 $('#attach').onclick=()=>{const c=active(),prompt=c&&[...c.messages].reverse().find(m=>m.type==='upload'&&!m.disabled);if(prompt)uploadFile(prompt.purpose);else notice('Choose Purchase Summary or Delivery Challans before attaching an Excel file.',true)};
 $('#hiddenfile').onchange=e=>handleUpload(e.target.files[0]);
 $('#historytoggle').onclick=()=>{$('#sidebar').classList.add('open');$('#sidebarshade').classList.add('open')};$('#sidebarshade').onclick=closeSidebar;

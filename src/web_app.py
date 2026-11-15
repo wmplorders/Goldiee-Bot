@@ -3,6 +3,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -92,7 +93,7 @@ def run_job(job):
                 last_line = last_line.split(': ', 1)[1]
             raise RuntimeError(last_line)
         result = json.loads(r.stdout.strip().splitlines()[-1])
-        job.update(status='completed', detail=result['message'], files=result.get('files', []))
+        job.update(status='completed', detail=result['message'], files=result.get('files', []), comparison=result.get('comparison'))
     except Exception as exc:
         job.update(status='failed', detail=str(exc))
     job['finished'] = datetime.now().isoformat(timespec='seconds')
@@ -254,8 +255,14 @@ class Handler(BaseHTTPRequestHandler):
                 SETTINGS.write_text(json.dumps({'company':company}), encoding='utf-8')
                 return self.reply(200, {'ok':True})
             if self.path == '/api/jobs':
-                if data.get('kind') not in {'mail','purchase','unloading','challans','stock','dms','connections'}:
+                if data.get('kind') not in {'mail','purchase','unloading','challans','stock','dms','connections','compare'}:
                     raise ValueError('Unknown action')
+                if data['kind'] == 'compare':
+                    identifier = str(data.get('conversation_id', ''))
+                    if not re.fullmatch(r'[0-9a-f]{32}', identifier) or not (CONVERSATIONS_DIR / (identifier+'.json')).exists():
+                        raise ValueError('Invalid comparison conversation')
+                    if len(str(data.get('text', ''))) > 2000:
+                        raise ValueError('Comparison response is too long')
                 company = settings()['company']
                 job = dict(id=uuid.uuid4().hex, created=datetime.now().isoformat(timespec='seconds'), status='queued',
                            company=company, request=data, detail='Waiting in queue', files=[])

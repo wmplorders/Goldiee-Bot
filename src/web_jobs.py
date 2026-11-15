@@ -10,6 +10,13 @@ def execute(data):
     c = load_config()
     kind = data['kind']
     outputs = []
+    if kind == 'compare':
+        from .sales_compare import advance
+        scope = 'web:' + str(data.get('conversation_id', ''))
+        if not data.get('conversation_id'):
+            raise ValueError('Comparison requires a conversation.')
+        result = advance(scope, str(data.get('text', '')), c)
+        return dict(message=result['message'], files=[Path(p).name for p in result['files']], comparison=result['prompt'])
     if kind == 'connections':
         from .tally_context import ensure_configured_company
         results = []

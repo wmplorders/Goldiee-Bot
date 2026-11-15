@@ -252,3 +252,34 @@ item and exact PTR spelling in fresh stock, then freshly exported batch history.
 It uses only a unique positive MRP, never the item-level MRP or a numerically
 similar PTR. Conflicts and missing values block generation. The audit sheet
 records the MRP source for each adjustment.
+# Sales Invoice Comparison
+
+Use `compare <customer name> <date>`, for example `compare maa vaishnow 14/11/26`.
+The date window is 8-14 November inclusive (the specified date and preceding six days).
+
+Available through WhatsApp and the web chat's **Compare Sales** action. No WhatsApp
+login is required when using the web interface.
+
+1. Select one of the top three fuzzy matches from the configured Tally company's ledger list.
+2. Select one or more active Tally sales invoices by the displayed numbers (e.g. `1,2` or `all`).
+3. The bot requests a fresh DMS Sales Invoice Dump. Confirm the DMS party if its name differs,
+   then select one or more DMS invoices.
+4. Accept or reject proposed item-name pairs for this comparison only.
+5. Confirm **Create Comparison** (reply `yes` in WhatsApp).
+
+The reply shows exceptions first and attaches an Excel with the snapshot, full comparison,
+original Tally item/ledger details and DMS raw rows. All rows are height 15. Quantities,
+MRP, rate, effective discount, GST rates, taxable values, tax ledgers and final totals are
+checked to two decimal places with zero tolerance. Identical item/price combinations are
+consolidated; ambiguous multiple-price combinations remain separate rather than averaged.
+Cancelled and optional Tally invoices are excluded. DMS requests exclude cancelled and
+proforma invoices. Send `cancel` to stop a comparison.
+
+This is read-only. It never alters vouchers, batches, ledgers or DMS records. It uses the
+configured Tally company and the existing DMS authorization/company ID. If DMS authorization
+expires, authorize it on the bot laptop and retry. Conversation snapshots are private files
+under `data/sales_compare/`, expire after 24 hours, and are excluded from Git. A failed step
+can be retried without advancing its saved state. The saved source snapshot is compared;
+start a new comparison if either source has changed since selection.
+
+Test: `.\.venv\Scripts\python.exe -m unittest discover -s tests`
