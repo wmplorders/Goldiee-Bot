@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import base64
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,14 @@ class DmsAuthenticationRequired(RuntimeError):
     pass
 
 
+AUTH_HELP = (
+    'DMS authorization has expired on this laptop. Run authorize_dms.bat from the bot '
+    'folder (or .\\.venv\\Scripts\\python.exe -m src.main dms-authorize), sign in in '
+    'the dedicated Edge window, and wait for "DMS authorization verified and saved". '
+    'Then click Retry on the failed comparison step. No invoice selection is lost.'
+)
+
+
 def authorize(config: dict) -> None:
     """One-time interactive authorization required by FieldAssist reCAPTCHA."""
     dms = config["dms"]
@@ -35,13 +44,31 @@ def authorize(config: dict) -> None:
             headless=False,
         )
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(f"{DMS_ORIGIN}/signin-oidc?company-id={dms['company_id']}")
-        print("Complete DMS login in the opened Edge window.")
-        page.wait_for_url(f"{DMS_ORIGIN}/**", timeout=300_000)
-        page.goto(f"{DMS_ORIGIN}/signin-oidc?company-id={dms['company_id']}")
-        page.wait_for_url(f"{DMS_ORIGIN}/**", timeout=120_000)
-        _save_storage_state(context)
-        context.close()
+        try:
+            page.goto(f"{DMS_ORIGIN}/signin-oidc?company-id={dms['company_id']}",
+                      wait_until='domcontentloaded', timeout=120_000)
+            print('Complete DMS login in the opened Edge window. Waiting for API verification...', flush=True)
+            deadline = time.monotonic() + 600
+            logged_out = False
+            while time.monotonic() < deadline:
+                try:
+                    body = page.locator('body').inner_text(timeout=2_000)
+                    if not logged_out and 'Error: Unauthorized' in body:
+                        page.get_by_text('Logout', exact=True).click(timeout=5_000)
+                        logged_out = True
+                except Exception:
+                    pass
+                state = _verified_browser_state(context, config)
+                if state is not None:
+                    _write_storage_state(state)
+                    # Verify the configured company switch as well, before closing Edge.
+                    _authenticated_session(config)
+                    print('DMS authorization verified and saved.', flush=True)
+                    return
+                page.wait_for_timeout(2_000)
+            raise DmsAuthenticationRequired('DMS login was not verified within ten minutes. ' + AUTH_HELP)
+        finally:
+            context.close()
 
 
 def fetch_inventory(config: dict) -> list[dict[str, Any]]:
@@ -59,6 +86,8 @@ def fetch_inventory(config: dict) -> list[dict[str, Any]]:
             params={"category-info": "true"},
             timeout=120,
         )
+    if response.status_code in {401, 403}:
+        raise DmsAuthenticationRequired(AUTH_HELP)
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, list):
@@ -113,6 +142,8 @@ def _authenticated_session(config: dict) -> requests.Session:
         _renew_session_headlessly(config)
         session = _session_from_storage()
         response = session.get(f"{DMS_ORIGIN}/api/v1/user/companies", timeout=30)
+    if response.status_code in {401, 403}:
+        raise DmsAuthenticationRequired(AUTH_HELP)
     response.raise_for_status()
     expected_id = int(config["dms"]["company_id"])
     company_ids = {
@@ -127,7 +158,9 @@ def _authenticated_session(config: dict) -> requests.Session:
 
 
 def _switch_company(session: requests.Session, company_id: int) -> None:
-    access_token = session.cookies.get("accessToken", domain="dms.fieldassist.io")
+    access_token = session.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    if not access_token:
+        access_token = session.cookies.get("accessToken", domain="dms.fieldassist.io")
     if access_token and _token_company_id(access_token) == company_id:
         session.headers["Authorization"] = f"Bearer {access_token}"
         return
@@ -205,22 +238,50 @@ def _renew_session_headlessly(config: dict) -> None:
             executable_path=config["whatsapp"]["edge_executable"],
             headless=True,
         )
-        context = browser.new_context(storage_state=str(SESSION_PATH))
-        page = context.new_page()
-        page.goto(
-            f"{DMS_ORIGIN}/signin-oidc?company-id={dms['company_id']}",
-            wait_until="domcontentloaded",
-            timeout=120_000,
-        )
-        page.wait_for_timeout(5_000)
-        if "login-v2.fieldassist.io" in page.url:
-            browser.close()
-            raise DmsAuthenticationRequired(
-                "FieldAssist expired the identity session and requires reCAPTCHA. "
-                "Run `python -m src.main dms-authorize` once to renew it."
+        try:
+            context = browser.new_context(storage_state=str(SESSION_PATH))
+            page = context.new_page()
+            page.goto(
+                f"{DMS_ORIGIN}/signin-oidc?company-id={dms['company_id']}",
+                wait_until="domcontentloaded", timeout=120_000,
             )
-        _save_storage_state(context)
-        browser.close()
+            for _ in range(6):
+                page.wait_for_timeout(2_000)
+                state = _verified_browser_state(context, config)
+                if state is not None:
+                    _write_storage_state(state)
+                    return
+                if 'login-v2.fieldassist.io' in page.url:
+                    break
+            raise DmsAuthenticationRequired(AUTH_HELP)
+        finally:
+            browser.close()
+
+
+def _verified_browser_state(context, config) -> dict | None:
+    state = context.storage_state()
+    session = _session_from_storage(state)
+    try:
+        response = session.get(f'{DMS_ORIGIN}/api/v1/user/companies', timeout=15)
+        if response.status_code in {401, 403}:
+            return None
+        response.raise_for_status()
+        companies = response.json()
+    except (requests.RequestException, ValueError):
+        return None
+    expected = int(config['dms']['company_id'])
+    ids = {int(c.get('companyId') or c.get('id')) for c in companies
+           if c.get('companyId') or c.get('id')}
+    if expected not in ids:
+        raise DmsAuthenticationRequired(f'This DMS account cannot access configured company {expected}. Sign in using the correct account.')
+    return state
+
+
+def _write_storage_state(state) -> None:
+    SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SESSION_PATH.with_suffix('.tmp')
+    temporary.write_text(json.dumps(state, indent=2), encoding='utf-8')
+    temporary.replace(SESSION_PATH)
 
 
 def _save_storage_state(context) -> None:
@@ -228,8 +289,9 @@ def _save_storage_state(context) -> None:
     context.storage_state(path=str(SESSION_PATH))
 
 
-def _session_from_storage() -> requests.Session:
-    state = json.loads(SESSION_PATH.read_text(encoding="utf-8"))
+def _session_from_storage(state=None) -> requests.Session:
+    if state is None:
+        state = json.loads(SESSION_PATH.read_text(encoding="utf-8"))
     session = requests.Session()
     session.headers.update({"Accept": "application/json", "User-Agent": "Goldiee-Purchase-Bot/1.0"})
     for cookie in state.get("cookies", []):
@@ -239,13 +301,20 @@ def _session_from_storage() -> requests.Session:
             domain=cookie.get("domain"),
             path=cookie.get("path", "/"),
         )
+    tokens = []
+    for cookie in state.get('cookies', []):
+        if cookie.get('name') == 'accessToken' and cookie.get('domain','').lstrip('.') == 'dms.fieldassist.io':
+            tokens.append(cookie['value'])
     for origin in state.get("origins", []):
         if origin.get("origin") != DMS_ORIGIN:
             continue
         storage = {entry["name"]: entry["value"] for entry in origin.get("localStorage", [])}
         token = storage.get("accessToken")
         if token:
-            session.headers["Authorization"] = f"Bearer {token}"
+            tokens.append(token)
+    if tokens:
+        token = max(tokens, key=lambda t: _token_expiry(t) or 0)
+        session.headers['Authorization'] = f'Bearer {token}'
     return session
 
 

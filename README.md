@@ -283,3 +283,9 @@ can be retried without advancing its saved state. The saved source snapshot is c
 start a new comparison if either source has changed since selection.
 
 Test: `.\.venv\Scripts\python.exe -m unittest discover -s tests`
+
+If DMS reports expired authorization, run `authorize_dms.bat` on the bot laptop,
+complete the sign-in in its dedicated Edge window, and wait for
+`DMS authorization verified and saved`. The helper verifies API access and the
+configured DMS company before it closes Edge. Then retry the failed web step.
+Sessions are local to each laptop; Git does not distribute login tokens.
