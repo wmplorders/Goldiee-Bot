@@ -88,6 +88,43 @@ class CompareTests(unittest.TestCase):
         with patch.object(sc,'_export',return_value=ET.fromstring('<ENVELOPE>'+xml('20261114',0)+'</ENVELOPE>')):
             with self.assertRaises(ValueError):sc.fetch_tally({},'Party','2026-11-08','2026-11-14')
 
+    def test_tally_blank_rate_is_zero_only_for_undiscounted_zero_value(self):
+        def export(amount='', discount='', rate='', batch_rate='', batch_amount='', second=''):
+            return ET.fromstring(f'''<ENVELOPE><VOUCHER><DATE>20261114</DATE>
+            <PARTYLEDGERNAME>Party</PARTYLEDGERNAME><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER>
+            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <LEDGERENTRIES.LIST><LEDGERNAME>Party</LEDGERNAME><AMOUNT>-105</AMOUNT></LEDGERENTRIES.LIST>
+            <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Scheme Item</STOCKITEMNAME>
+            <BILLEDQTY>2 PCS</BILLEDQTY><RATE>{rate}</RATE><DISCOUNT>{discount}</DISCOUNT><AMOUNT>{amount}</AMOUNT>
+            <ACCOUNTINGALLOCATIONS.LIST><LEDGERNAME>Sales</LEDGERNAME></ACCOUNTINGALLOCATIONS.LIST>
+            <BATCHALLOCATIONS.LIST><BATCHNAME>7.00</BATCHNAME><BILLEDQTY>2 PCS</BILLEDQTY>
+            <BATCHRATE>{batch_rate}</BATCHRATE><AMOUNT>{batch_amount}</AMOUNT>
+            <MRP><UDF_AA_BATCH_MRP_RATE>20</UDF_AA_BATCH_MRP_RATE></MRP></BATCHALLOCATIONS.LIST>{second}
+            <RATEDETAILS.LIST><GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD><GSTRATE>0</GSTRATE></RATEDETAILS.LIST>
+            <RATEDETAILS.LIST><GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD><GSTRATE>0</GSTRATE></RATEDETAILS.LIST>
+            <RATEDETAILS.LIST><GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD><GSTRATE>0</GSTRATE></RATEDETAILS.LIST>
+            </ALLINVENTORYENTRIES.LIST></VOUCHER></ENVELOPE>''')
+
+        for amount in ('', '0', '0.00'):
+            with self.subTest(amount=amount), patch.object(sc, '_export', return_value=export(amount=amount)):
+                records, _ = sc.fetch_tally({}, 'Party', '2026-11-08', '2026-11-14')
+                row = records[0]['lines'][0]
+                self.assertEqual((row['rate'], row['discount'], row['taxable'], row['qty']), (0, 0, 0, 2))
+                self.assertEqual((row['mrp'], row['ptr']), (20, '7.00'))
+
+        for kwargs in ({'amount': '20'}, {'discount': '100'}, {'discount': '5'},
+                       {'batch_amount': '20'}, {'amount': '20', 'second': '<BATCHALLOCATIONS.LIST/>'}):
+            with self.subTest(kwargs=kwargs), patch.object(sc, '_export', return_value=export(**kwargs)):
+                with self.assertRaisesRegex(ValueError, r'TEST-1: rate unavailable for Scheme Item .*PTR 7.00'):
+                    sc.fetch_tally({}, 'Party', '2026-11-08', '2026-11-14')
+
+        for kwargs in ({'rate': '10/PCS', 'amount': '20'},
+                       {'batch_rate': '10/PCS', 'amount': '20'},
+                       {'rate': '10/PCS', 'discount': '100'}):
+            with self.subTest(kwargs=kwargs), patch.object(sc, '_export', return_value=export(**kwargs)):
+                records, _ = sc.fetch_tally({}, 'Party', '2026-11-08', '2026-11-14')
+                self.assertEqual(records[0]['lines'][0]['rate'], 10)
+
     def test_dms_cancel_dates_and_multiple_discounts(self):
         row={'Bill ID':'1','Bill Date':'2026-11-14','Buyer Name':'Party','Buyer ERP ID':'P',
              'Invoice Total Value':'105','Product Name':'Item','Invoiced Total Quantity':'10','MRP':'20','Unit Price':'10',

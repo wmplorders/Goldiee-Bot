@@ -130,6 +130,18 @@ def fetch_tally(config, party, start, end):
                 quantity = _text(batch, 'BILLEDQTY') or _text(entry, 'BILLEDQTY')
                 rate = _text(batch, 'BATCHRATE') or _text(entry, 'RATE')
                 discount = number(_text(batch, 'BATCHDISCOUNT') or _text(entry, 'DISCOUNT'), blank=True)
+                amount = _text(batch, 'AMOUNT') or _text(entry, 'AMOUNT')
+                if not rate:
+                    # Tally may omit RATE and AMOUNT for zero-rate stock. A discount,
+                    # however, can hide a nonzero original rate; never infer that rate.
+                    if discount == 0 and number(amount, blank=True) == 0:
+                        rate = '0/PCS'
+                    else:
+                        raise ValueError(
+                            f'{invoice}: rate unavailable for {name} '
+                            f'(PTR {_text(batch, "BATCHNAME") or "not specified"}). '
+                            'Check the rate in this Tally voucher and retry; '
+                            'a missing rate cannot be assumed to be zero on a paid or discounted item.')
                 free = discount == 100 or number(rate) == 0
                 if len(batches)>1 and (not _text(batch,'BILLEDQTY') or (not _text(batch,'AMOUNT') and not free)):
                     raise ValueError(f'{invoice}: incomplete batch quantity/amount for {name}; cannot duplicate item totals across batches.')
