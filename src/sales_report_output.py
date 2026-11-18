@@ -122,52 +122,91 @@ def snapshot_rows(payload):
     return previous,end,result+[totals]
 
 
+def _wrap_snapshot_text(value,width,font,draw):
+    """Wrap full labels, including unbroken ledger codes, without truncation."""
+    lines=[];current=''
+    for word in str(value).split():
+        candidate=(current+' '+word).strip()
+        if draw.textlength(candidate,font=font)<=width:
+            current=candidate;continue
+        if current:lines.append(current);current=''
+        while draw.textlength(word,font=font)>width:
+            split=1
+            while split<len(word) and draw.textlength(word[:split+1],font=font)<=width:split+=1
+            lines.append(word[:split]);word=word[split:]
+        current=word
+    if current:lines.append(current)
+    return lines or ['']
+
+
 def png(payload,path):
     from PIL import Image, ImageDraw, ImageFont
+    import math
     previous,end,rows=snapshot_rows(payload)
+    scale=3
     def font(size,bold=False):
+        pixels=round(size*scale)
         candidates=[Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/('arialbd.ttf' if bold else 'arial.ttf'),
                     Path('/usr/share/fonts/truetype/dejavu')/('DejaVuSans-Bold.ttf' if bold else 'DejaVuSans.ttf')]
         for f in candidates:
-            if f.exists():return ImageFont.truetype(str(f),size)
-        return ImageFont.load_default(size=size)
-    normal,bold,title=font(18),font(18,True),font(26,True)
+            if f.exists():return ImageFont.truetype(str(f),pixels)
+        return ImageFont.load_default(size=pixels)
+    regular,bold,small,smallbold,title=font(15),font(15,True),font(12.5),font(12.5,True),font(20,True)
     probe=ImageDraw.Draw(Image.new('RGB',(1,1)))
-    widths=[max(590,int(max(probe.textlength(r[0],font=normal) for r in rows))+24),
-            max(180,int(max(probe.textlength(r[1],font=normal) for r in rows))+24)]+[140]*6+[180]*4
+    widths=[305,108,90,82,90,90,82,90,102,92,104,94]
+    # Widen only exceptional numeric columns; normal reports retain the compact layout.
+    for c in range(2,12):
+        widest=max(probe.textlength(indian(row[c]),font=f) for row in rows for f in (regular,bold))
+        widths[c]=max(widths[c],math.ceil(widest/scale)+10)
     xs=[0]
-    for w in widths:xs.append(xs[-1]+w)
-    heading,subtitle,header,rowheight=48,38,64,32
-    top=heading+subtitle+header;height=top+rowheight*len(rows)
-    image=Image.new('RGB',(xs[-1]+2,height+2),'white');draw=ImageDraw.Draw(image)
-    draw.rectangle((0,0,xs[-1],heading),fill='#'+DARK)
-    draw.text((10,10),'GOLDIEE - SALES AND PAYMENT SNAPSHOT',font=title,fill='white')
-    sub=f'Daily detail: {previous:%d-%b-%Y} and {end:%d-%b-%Y}. Totals: {date.fromisoformat(payload["start"]):%d-%b-%Y} to {end:%d-%b-%Y}. Balances: {end:%d-%b-%Y}.'
-    draw.text((10,heading+10),sub,font=normal,fill='#58676D')
+    for width in widths:xs.append(xs[-1]+width)
+    names=[_wrap_snapshot_text(r[0],(widths[0]-12)*scale,smallbold,probe) for r in rows]
+    towns=[_wrap_snapshot_text(r[1],(widths[1]-10)*scale,small,probe) for r in rows]
+    heights=[max(32,9+max(len(n),len(t))*15) for n,t in zip(names,towns)]
+    heading,subtitle,header=36,22,50
+    top=heading+subtitle+header;height=top+sum(heights)
+    image=Image.new('RGB',(xs[-1]*scale+2,height*scale+2),'white');draw=ImageDraw.Draw(image)
+    def rect(box,fill=None,outline=None,width=1):
+        draw.rectangle(tuple(round(x*scale) for x in box),fill=fill,outline=outline,width=round(width*scale))
+    def line(box,fill,width=1):draw.line(tuple(round(x*scale) for x in box),fill=fill,width=round(width*scale))
+    def label(x,y,value,f,color='#293237',align='left'):
+        value=str(value)
+        if align=='right':x-=draw.textlength(value,font=f)/scale
+        elif align=='center':x-=draw.textlength(value,font=f)/scale/2
+        draw.text((round(x*scale),round(y*scale)),value,font=f,fill=color)
+    rect((0,0,xs[-1],heading),fill='#'+DARK)
+    label(8,6,'GOLDIEE - SALES & PAYMENTS',title,'white')
+    start=date.fromisoformat(payload['start'])
+    label(8,heading+4,f'Totals: {start:%d}-{end:%d %b %Y}. Closing balances as at {end:%d %b %Y}.',small,'#58676D')
     y=heading+subtitle
-    draw.rectangle((0,y,xs[-1],top),fill='#E7ECEE')
-    for i,label in [(0,'PARTY NAME'),(1,'POST CODE'),(8,'SPICES TOTAL'),(9,'DET. TOTAL'),(10,'DEBIT BALANCE'),(11,'CREDIT BALANCE')]:
-        draw.text((xs[i]+8,y+24),label,font=bold,fill='#'+DARK)
+    rect((0,y,xs[-1],top),fill='#E7ECEE')
+    label(6,y+18,'PARTY NAME',smallbold)
+    label(xs[1]+5,y+18,'POST CODE',smallbold)
     for day,first in [(previous,2),(end,5)]:
-        draw.rectangle((xs[first],y,xs[first+3],y+32),fill='#E9DDBB' if first==5 else '#E7ECEE')
-        label=day.strftime('%d-%b-%Y');draw.text(((xs[first]+xs[first+3]-draw.textlength(label,font=bold))/2,y+7),label,font=bold,fill='#'+DARK)
-        for j,(label,fill,color) in enumerate(CATEGORIES):
-            c=first+j;draw.rectangle((xs[c],y+32,xs[c+1],top),fill='#'+fill)
-            short=['SPICES','DETERGENT','PAYMENT'][j]
-            draw.text((xs[c]+8,y+39),short,font=bold,fill='#'+color)
-    for i,row in enumerate(rows):
-        y=top+i*rowheight;is_total=i==len(rows)-1
-        draw.rectangle((0,y,xs[-1],y+rowheight),fill='#'+DARK if is_total else ('#'+STRIPE if i%2 else 'white'))
-        for c,value in enumerate(row):
-            label=str(value or '') if c<2 else indian(value)
-            f=bold if is_total else normal
-            color='white' if is_total else ('#316246' if c in (4,7) else '#'+TEXT)
-            x=xs[c]+8 if c<2 else xs[c+1]-draw.textlength(label,font=f)-8
-            draw.text((x,y+6),label,font=f,fill=color)
-        draw.line((0,y+rowheight,xs[-1],y+rowheight),fill='#'+GRID,width=1)
-    for x in xs:draw.line((x,top,x,height),fill='#'+GRID,width=1)
-    for first in (2,5):draw.rectangle((xs[first],heading+subtitle,xs[first+3],height),outline='#52656C',width=3)
-    image.save(path,format='PNG')
+        rect((xs[first],y,xs[first+3],y+24),fill='#E9DDBB' if first==5 else '#E7ECEE')
+        label((xs[first]+xs[first+3])/2,y+4,day.strftime('%d %b'),bold,align='center')
+        for j,(_,fill,color) in enumerate(CATEGORIES):
+            c=first+j;rect((xs[c],y+24,xs[c+1],top),fill='#'+fill)
+            label((xs[c]+xs[c+1])/2,y+29,['SPICES','DET.','PAYMENT'][j],smallbold,'#'+color,align='center')
+    for c,labels,fill,color in [(8,['SPICES','TOTAL'],'F3EDDC','68542E'),(9,['DET.','TOTAL'],'E7EFF5','3B5B73'),
+                               (10,['DEBIT','BALANCE'],'F4E9E6','784D43'),(11,['CREDIT','BALANCE'],'E5F0E8','316246')]:
+        rect((xs[c],y,xs[c+1],top),fill='#'+fill)
+        for k,value in enumerate(labels):label((xs[c]+xs[c+1])/2,y+8+k*17,value,smallbold,'#'+color,align='center')
+    y=top
+    for i,(row,rowheight,name,town) in enumerate(zip(rows,heights,names,towns)):
+        is_total=i==len(rows)-1
+        rect((0,y,xs[-1],y+rowheight),fill='#'+DARK if is_total else ('#F2F5F6' if i%2 else 'white'))
+        color='white' if is_total else '#'+TEXT
+        for lines,x,f in [(name,6,smallbold),(town,xs[1]+5,small)]:
+            for k,value in enumerate(lines):label(x,y+(rowheight-len(lines)*15)/2+k*15-1,value,f,color)
+        for c in range(2,12):
+            label(xs[c+1]-5,y+(rowheight-18)/2-1,indian(row[c]),bold if is_total else regular,
+                  'white' if is_total else ('#316246' if c in (4,7) else '#'+TEXT),align='right')
+        line((0,y+rowheight,xs[-1],y+rowheight),'#DCE3E6',.6);y+=rowheight
+    for x in xs:line((x,top,x,height),'#DCE3E6',.6)
+    for first in (2,5):rect((xs[first],heading+subtitle,xs[first+3],height),outline='#52656C',width=1.5)
+    image.save(path,format='PNG',optimize=True,dpi=(300,300))
+    image.close()
 
 
 def build(payload,destination,stem):

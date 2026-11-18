@@ -99,6 +99,38 @@ class SalesReportTests(unittest.TestCase):
             self.assertEqual(s['CQ3'].value,75);self.assertIsNone(s['BE3'].value);w.close()
             with Image.open(png) as im:self.assertGreater(im.width,1500);self.assertGreater(im.height,150)
 
+    def test_compact_png_resolution_and_unchanged_data(self):
+        from PIL import Image
+        p=payload();before=copy.deepcopy(p)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'compact.png';output.png(p,path)
+            with Image.open(path) as image:
+                self.assertEqual(image.width,3989)
+                self.assertAlmostEqual(image.info['dpi'][0],300,delta=1)
+                self.assertEqual(image.format,'PNG')
+            self.assertEqual(p,before)
+
+    def test_full_names_and_long_towns_wrap_without_truncation(self):
+        from PIL import Image,ImageDraw,ImageFont
+        draw=ImageDraw.Draw(Image.new('RGB',(1,1)))
+        font=ImageFont.load_default(size=20)
+        for label in ['A VERY LONG CUSTOMER NAME C0012345(ROBERTSGANJ)','CUSTOMERIDENTIFIERWITHOUTSPACES'*4,'Town Name With Several Words']:
+            lines=output._wrap_snapshot_text(label,100,font,draw)
+            self.assertEqual(''.join(lines).replace(' ',''),label.replace(' ',''))
+            self.assertTrue(all(draw.textlength(line,font=font)<=100 for line in lines))
+
+    def test_large_figures_expand_columns_instead_of_clipping(self):
+        from PIL import Image
+        p=payload();large=copy.deepcopy(p);large['rows'][0]['debit']=1234567890123
+        large['rows'][0]['name']='LONGCUSTOMERIDENTIFIER'*8
+        large['rows'][0]['town']='LONGTOWNNAME'*5
+        with tempfile.TemporaryDirectory() as tmp:
+            a,b=Path(tmp)/'small.png',Path(tmp)/'large.png'
+            output.png(p,a);output.png(large,b)
+            with Image.open(a) as first,Image.open(b) as second:
+                self.assertGreater(second.width,first.width)
+                self.assertGreater(second.height,first.height)
+
     def test_month_length_february(self):
         p=payload();p['start']='2028-02-01';p['end']='2028-02-29';p['days']=29;p['rows'][0]['values']=[None]*87
         with tempfile.TemporaryDirectory() as tmp:

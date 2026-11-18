@@ -302,6 +302,12 @@ post code, the last date and preceding calendar date, and four totals/balance co
 If the preceding date is outside the requested period, its snapshot cells stay blank.
 All Excel rows are height 15. Dates have bold outlines and amounts use Indian comma
 grouping, displayed as whole rupees while retaining paise internally.
+PNG snapshots use the compact WhatsApp layout: full names wrap in a narrower party
+column, totals have two-line headings, and each date block retains its bold outline.
+Text is rendered directly at 3x resolution into a lossless, optimized 300-DPI PNG
+(about 3989 pixels wide for normal figures). Long names/towns wrap without truncation,
+and exceptionally large figures expand only their numeric column. Excel formatting
+and report calculations are unchanged.
 
 - Spices: final customer amounts of **Tax Invoice** and **Bill of Supply** vouchers.
 - Detergent: final customer amounts of **Detergent Invoice** vouchers.
