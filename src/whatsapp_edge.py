@@ -101,6 +101,10 @@ class WhatsAppEdge:
         ).first
         await attach.click()
         file_input = self.page.locator("input[type='file']").last
+        if Path(path).suffix.lower() == '.png':
+            image_input = self.page.locator("input[type='file'][accept*='image']")
+            if await image_input.count():
+                file_input = image_input.first
         await file_input.set_input_files(path)
         await self.page.wait_for_timeout(1000)
         await self.page.locator("span[data-icon='send']").last.click()
@@ -165,6 +169,23 @@ class WhatsAppEdge:
             from .sales_compare import has_pending
             scope = 'whatsapp:' + chat_name
             is_compare = text.strip().lower().startswith('compare ')
+            from .sales_report import has_pending as sales_pending, cancel as cancel_sales
+            is_sales = bool(re.match(r'^sales\s+report\s+', text.strip(), re.I))
+            if is_compare:
+                cancel_sales(scope)
+            if is_sales or (sales_pending(scope) and not recognized_command(text)):
+                try:
+                    if is_sales:
+                        self.pending_unloading.pop(chat_name, None)
+                        if has_pending(scope):
+                            from .sales_compare import cancel_pending
+                            await asyncio.to_thread(cancel_pending, scope)
+                    result = await run_command(text, files, self.config, sales_scope=scope)
+                    await self._send_to_chat_unlocked(chat_name, result.message, result.attachments)
+                except Exception as exc:
+                    await self._send_to_chat_unlocked(chat_name, f'Sales report: {exc}')
+                self._mark_processed(message_id)
+                continue
             if is_compare or (has_pending(scope) and not recognized_command(text)):
                 try:
                     if is_compare:
@@ -179,6 +200,7 @@ class WhatsAppEdge:
             is_reply = False
             from .undispatched import PROMPT, parse_bills
             if " ".join(text.casefold().split()).startswith("unloading slip "):
+                cancel_sales(scope)
                 from .unloading_slip import parse_user_date
                 try:
                     parse_user_date(re.sub(r"^unloading\s+slip\s+", "", text.strip(), flags=re.I))

@@ -36,6 +36,7 @@ function friendlyDetail(job){const lines=String(job?.detail||'').trim().split('\
 function controlsHtml(m,index){
   if(!m.controls)return '';
   const disabled=m.disabled?'disabled':'';
+  if(m.type==='sales_town')return `<div class="controls"><form class="text-control" data-sales-town-form><textarea placeholder="Town / Post Code" ${disabled} required maxlength="80"></textarea><button class="primary" ${disabled}>Save Town</button></form><div class="control-buttons"><button data-upload="sales_towns" ${disabled}>Import Towns from Previous Report</button><button data-sales-refresh ${disabled}>Recheck Customers</button><button data-cancel ${disabled}>Cancel</button></div></div>`;
   if(m.type==='compare_invoices')return `<div class="controls"><div class="invoice-list">${m.options.map(o=>`<label class="invoice-option"><input class="compare-check" type="checkbox" value="${esc(o.value)}" ${(m.selected||[]).includes(o.value)?'checked':''} ${disabled}><span>${esc(o.label)}</span></label>`).join('')}</div><div class="control-buttons"><button class="primary" data-compare-select ${disabled}>Continue</button><button data-cancel ${disabled}>Cancel</button></div></div>`;
   if(m.type==='choice')return `<div class="controls control-buttons">${m.options.map(o=>`<button ${disabled} data-answer="${esc(o.value)}" data-label="${esc(o.label)}">${esc(o.label)}</button>`).join('')}</div>`;
   if(m.type==='date')return `<div class="controls"><div class="control-buttons"><button ${disabled} data-answer="${today()}" data-label="Today">Today</button><button ${disabled} data-answer="${yesterday()}" data-label="Yesterday">Yesterday</button><button ${disabled} data-show-date>Choose date</button></div><form class="date-control" data-date-form hidden><input type="date" value="${today()}" required ${disabled}><button class="primary" ${disabled}>Continue</button></form></div>`;
@@ -49,8 +50,9 @@ function controlsHtml(m,index){
 function jobHtml(m){
   const j=jobById(m.jobId)||{status:'queued',detail:'Waiting in queue',files:[]};
   const retry=j.status==='failed'?`<button data-retry="${esc(j.id)}">Retry</button>`:'';
-  const again=['completed','failed'].includes(j.status)&&!j.comparison?`<button data-start="${esc(m.flow)}">Create another</button>`:'';
-  return `<div class="sender">Goldiee ${statusLabel(j.status)}</div><div class="bubble-text">${esc(friendlyDetail(j))}</div><div class="job-files">${(j.files||[]).map(link).join('')}</div>${j.diagnostic?`<details><summary>Technical details</summary><pre>${esc(j.diagnostic)}</pre></details>`:''}<div class="controls control-buttons">${retry}${again}</div>`;
+  const again=['completed','failed'].includes(j.status)&&!j.comparison&&!j.sales_prompt?`<button data-start="${esc(m.flow)}">Create another</button>`:'';
+  const snapshots=(j.files||[]).filter(n=>/\.png$/i.test(n)).map(n=>`<a href="/api/file?name=${encodeURIComponent(n)}&inline=1" target="_blank" rel="noopener"><img class="report-snapshot" src="/api/file?name=${encodeURIComponent(n)}&inline=1" alt="Sales and payment snapshot"></a>`).join('');
+  return `<div class="sender">Goldiee ${statusLabel(j.status)}</div><div class="bubble-text">${esc(friendlyDetail(j))}</div><div class="job-files">${(j.files||[]).map(link).join('')}</div>${snapshots}${j.diagnostic?`<details><summary>Technical details</summary><pre>${esc(j.diagnostic)}</pre></details>`:''}<div class="controls control-buttons">${retry}${again}</div>`;
 }
 function renderMessage(m,index){
   if(m.type==='job')return `<div class="message-row bot"><div class="bubble">${jobHtml(m)}<div class="bubble-time">${esc(m.time||'')}</div></div></div>`;
@@ -82,6 +84,16 @@ async function syncJobConversations(){
   for(const c of state.conversations){
     const jm=[...c.messages].reverse().find(m=>m.type==='job');if(!jm)continue;
     const j=jobById(jm.jobId);if(!j)continue;
+    if(c.flow==='sales'&&j.status==='completed'){
+      c.context.appliedJobs=c.context.appliedJobs||[];
+      if(!c.context.appliedJobs.includes(j.id)){
+        c.context.appliedJobs.push(j.id);c.context.salesWaiting=Boolean(j.sales_prompt);
+        c.status=j.sales_prompt?'active':'completed';
+        if(j.sales_prompt)c.messages.push(assistant('Enter the town, or import the known towns from a previous report.',{type:'sales_town',controls:true}));
+        await api('/api/conversations',{action:'save',conversation:c});
+      }
+      continue;
+    }
     if(c.flow==='compare'&&j.status==='completed'){
       c.context.appliedJobs=c.context.appliedJobs||[];
       if(!c.context.appliedJobs.includes(j.id)){
@@ -98,8 +110,9 @@ async function syncJobConversations(){
 
 async function startFlow(flow){
   selectedUpload='';
-  const names={compare:'Compare Sales',purchase:'Purchase Summary',unloading:'Unloading Slip',stock:'Stock Status',dms:'DMS Stock',challans:'Delivery Challans',files:'Generated Files',connections:'Connection Check'};
+  const names={sales:'Sales Report',compare:'Compare Sales',purchase:'Purchase Summary',unloading:'Unloading Slip',stock:'Stock Status',dms:'DMS Stock',challans:'Delivery Challans',files:'Generated Files',connections:'Connection Check'};
   const c=await createConversation(flow,names[flow]||'New conversation',[user(names[flow]||flow)]);
+  if(flow==='sales')return askDate('Through which date should I create the monthly sales report? It will start on the first of that month.');
   if(flow==='compare')return append(assistant('Which customer should I look for?',{type:'text_input',controls:true,placeholder:'Customer name'}));
   if(flow==='purchase')return append(assistant('Where should I take the invoice from?',{type:'choice',controls:true,options:[{label:'Gmail',value:'gmail'},{label:'Upload Excel',value:'upload'}]}));
   if(flow==='unloading')return askDate('Which purchase invoice date should I use?');
@@ -113,6 +126,10 @@ async function askDate(text){await append(assistant(text,{type:'date',controls:t
 async function chooseAnswer(value,label){
   const c=active(),prompt=[...c.messages].reverse().find(m=>m.controls&&!m.disabled);if(!prompt)return;
   disableLastPrompt();await append(user(label));
+  if(c.flow==='sales'&&prompt.type==='date'){
+    c.context.salesCommand=`sales report ${value}`;
+    return showConfirmation('sales',[{label:'Period',value:`01-${value.slice(5,7)}-${value.slice(0,4)} to ${displayDate(value)}`},{label:'Company',value:state.settings.company||'Not configured'},{label:'Outputs',value:'Excel and last-two-days PNG snapshot'},{label:'Excluded',value:'Closed Customers and credit notes from sales'}],'Create Sales Report');
+  }
   if(c.flow==='compare'){
     if(prompt.type==='date')return enqueue({kind:'compare',conversation_id:c.id,text:`compare ${c.context.customer} ${value}`},'compare');
     return submitCompare(value);
@@ -140,6 +157,7 @@ async function selectInvoices(button){
 }
 async function submitText(form){const value=form.querySelector('textarea').value.trim();if(!value)return;const c=active();disableLastPrompt();if(c.flow==='compare'){c.context.customer=value;await append(user(value));return askDate('Choose the end date. I will include that date and the preceding six days.')}if(c.flow==='unloading'){c.context.bills=value;await append(user(value));return showUnloadingConfirmation()}}
 async function submitCompare(text){const c=active();c.context.compareWaiting=false;return enqueue({kind:'compare',conversation_id:c.id,text},'compare')}
+async function submitSales(text,file){const c=active();c.context.salesWaiting=false;return enqueue({kind:'sales',conversation_id:c.id,text,...(file?{file}:{})},'sales')}
 async function showPurchaseConfirmation(){const c=active();return showConfirmation('mail',[{label:'Source',value:'Gmail'},{label:'Email received date',value:displayDate(c.context.date)}],'Create Summaries')}
 async function showUnloadingConfirmation(){
   const c=active(),x=c.context,lines=[{label:'Purchase date',value:displayDate(x.date)},{label:'Invoices',value:(x.invoices||[]).join(', ')},{label:'Incoming quantity',value:`${Number(x.cases||0).toFixed(2)} cases`},{label:'Undispatched sales bills',value:x.bills||'None'},{label:'Stock source',value:'Fresh Tally stock'},{label:'Company',value:state.settings.company||'Not configured'}];
@@ -151,12 +169,13 @@ async function changeUnloading(section){
   if(section==='invoices'){const p=active().context.preview;return append(assistant('Select the purchase invoices to include.',{type:'invoices',controls:true,invoices:p?.invoices||[]}))}
   if(section==='bills')return append(assistant('Are any billed goods still in the godown?',{type:'choice',controls:true,options:[{label:'None',value:'none'},{label:'Enter bill numbers',value:'bills'}]}));
 }
-async function makeChanges(){const c=active();disableLastPrompt();await append(user('Make changes'));if(c.flow==='unloading')return append(assistant('What would you like to change?',{type:'choice',controls:true,options:[{label:'Date',value:'change:date'},{label:'Purchase invoices',value:'change:invoices'},{label:'Undispatched bills',value:'change:bills'}]}));if(c.flow==='purchase')return startFlow('purchase');return append(assistant('Cancel this operation and choose the action again below.'))}
-async function cancelFlow(){disableLastPrompt();const c=active();if(c.flow==='compare'&&c.context.compareWaiting){await append(user('Cancel'));return submitCompare('cancel')}c.status='cancelled';await append(user('Cancel'),assistant('Cancelled. No operation was started.'))}
+async function makeChanges(){const c=active();disableLastPrompt();await append(user('Make changes'));if(c.flow==='sales')return askDate('Choose a different sales-report end date.');if(c.flow==='unloading')return append(assistant('What would you like to change?',{type:'choice',controls:true,options:[{label:'Date',value:'change:date'},{label:'Purchase invoices',value:'change:invoices'},{label:'Undispatched bills',value:'change:bills'}]}));if(c.flow==='purchase')return startFlow('purchase');return append(assistant('Cancel this operation and choose the action again below.'))}
+async function cancelFlow(){disableLastPrompt();const c=active();if(c.flow==='sales'&&c.context.salesWaiting){await append(user('Cancel'));return submitSales('cancel')}if(c.flow==='compare'&&c.context.compareWaiting){await append(user('Cancel'));return submitCompare('cancel')}c.status='cancelled';await append(user('Cancel'),assistant('Cancelled. No operation was started.'))}
 
 async function confirmJob(){
   const c=active(),kind=c.context.pendingKind;disableLastPrompt();await append(user(c.messages.findLast(m=>m.type==='confirm')?.confirmLabel||'Create'));
   let request={kind,conversation_id:c.id};
+  if(kind==='sales')request.text=c.context.salesCommand;
   if(kind==='mail')request.date=c.context.date;
   if(kind==='purchase'||kind==='challans')request.file=c.context.file;
   if(kind==='unloading')request={...request,date:c.context.date,invoices:(c.context.invoices||[]).join(', '),dispatch:c.context.dispatch||'none',bills:c.context.bills||''};
@@ -175,11 +194,14 @@ async function handleUpload(file){
   try{
     notice('Uploading workbook…');const response=await fetch('/api/upload',{method:'POST',headers:{'X-CSRF-Token':token,'X-Filename':encodeURIComponent(file.name)},body:file});const result=await response.json();if(!response.ok)throw Error(result.error);
     const c=active();disableLastPrompt();c.context.file=result.name;c.context.originalFile=file.name;await append(user(`Attached: ${file.name}`));
+    if(selectedUpload==='sales_towns')return await submitSales('import towns',result.name);
     const label=selectedUpload==='purchase'?'Create Summary':'Create Challans';await showConfirmation(selectedUpload,[{label:'Workbook',value:file.name},{label:'Action',value:selectedUpload==='purchase'?'Create purchase summary':'Create delivery challans'}],label);
   }catch(e){notice(e.message,true)}finally{selectedUpload=''}
 }
 
 function wireDynamic(){
+  document.querySelectorAll('[data-sales-town-form]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();const town=f.querySelector('textarea').value.trim();if(!town)return;disableLastPrompt();await append(user(town));await submitSales(town)});
+  document.querySelectorAll('[data-sales-refresh]').forEach(b=>b.onclick=async()=>{disableLastPrompt();await append(user('Recheck customers'));await submitSales('refresh')});
   document.querySelectorAll('[data-compare-select]').forEach(b=>b.onclick=async()=>{const checked=[...b.closest('.bubble').querySelectorAll('.compare-check:checked')];if(!checked.length)return notice('Select at least one invoice.',true);const prompt=[...active().messages].reverse().find(m=>m.controls&&!m.disabled);prompt.selected=checked.map(x=>x.value);disableLastPrompt();await append(user(checked.map(x=>x.value).join(', ')));await submitCompare(checked.map(x=>x.value).join(','))});
   document.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>startFlow(b.dataset.start));
   document.querySelectorAll('[data-answer]').forEach(b=>b.onclick=()=>chooseAnswer(b.dataset.answer,b.dataset.label));
@@ -200,8 +222,20 @@ function closeSidebar(){$('#sidebar').classList.remove('open');$('#sidebarshade'
 
 $('#actions').onclick=e=>{const b=e.target.closest('[data-flow]');if(b)startFlow(b.dataset.flow)};
 $('#newchat').onclick=()=>{activeId='';renderAll();closeSidebar()};
-$('#composer').onsubmit=async e=>{e.preventDefault();const input=$('#message'),value=input.value.trim();if(!value)return;input.value='';if(/^compare\s/i.test(value)){await createConversation('compare','Compare Sales',[user(value)]);return submitCompare(value)}const c=active();if(c?.flow==='compare'&&c.context.compareWaiting){disableLastPrompt();await append(user(value));return submitCompare(value)}if(c?.flow==='compare'&&c.status==='processing')return notice('Please wait for the current comparison step.',true);const p=c&&[...c.messages].reverse().find(m=>m.controls&&!m.disabled);if(c?.flow==='compare'&&p?.type==='text_input'){c.context.customer=value;disableLastPrompt();await append(user(value));return askDate('Choose the end date, including the preceding six days.')}const flow=parseCommand(value);if(flow)startFlow(flow);else createConversation('chat','Question',[user(value),assistant('Choose an action below to begin.')],{}).then(c=>{c.status='completed';saveActive()})};
-$('#attach').onclick=()=>{const c=active(),prompt=c&&[...c.messages].reverse().find(m=>m.type==='upload'&&!m.disabled);if(prompt)uploadFile(prompt.purpose);else notice('Choose Purchase Summary or Delivery Challans before attaching an Excel file.',true)};
+$('#composer').onsubmit=async e=>{
+ e.preventDefault();const input=$('#message'),value=input.value.trim();if(!value)return;input.value='';
+ if(/^sales\s+report\s/i.test(value)){await createConversation('sales','Sales Report',[user(value)]);return submitSales(value)}
+ if(/^sales\s+report$/i.test(value))return startFlow('sales');
+ if(/^compare\s/i.test(value)){await createConversation('compare','Compare Sales',[user(value)]);return submitCompare(value)}
+ const c=active();
+ if(c?.flow==='sales'&&c.context.salesWaiting){disableLastPrompt();await append(user(value));return submitSales(value)}
+ if(c?.flow==='compare'&&c.context.compareWaiting){disableLastPrompt();await append(user(value));return submitCompare(value)}
+ if(['compare','sales'].includes(c?.flow)&&c.status==='processing')return notice('Please wait for the current step.',true);
+ const p=c&&[...c.messages].reverse().find(m=>m.controls&&!m.disabled);
+ if(c?.flow==='compare'&&p?.type==='text_input'){c.context.customer=value;disableLastPrompt();await append(user(value));return askDate('Choose the end date, including the preceding six days.')}
+ const flow=parseCommand(value);if(flow)startFlow(flow);else createConversation('chat','Question',[user(value),assistant('Choose an action below to begin.')],{}).then(c=>{c.status='completed';saveActive()});
+};
+$('#attach').onclick=()=>{const c=active();if(c?.flow==='sales'&&c.context.salesWaiting)return uploadFile('sales_towns');const prompt=c&&[...c.messages].reverse().find(m=>m.type==='upload'&&!m.disabled);if(prompt)uploadFile(prompt.purpose);else notice('Choose an action requesting an Excel file before attaching it.',true)};
 $('#hiddenfile').onchange=e=>handleUpload(e.target.files[0]);
 $('#historytoggle').onclick=()=>{$('#sidebar').classList.add('open');$('#sidebarshade').classList.add('open')};$('#sidebarshade').onclick=closeSidebar;
 $('#settingsbutton').onclick=()=>{const d=$('#settingsdialog');d.querySelector('[name=company]').value=state.settings.company||'';d.showModal()};

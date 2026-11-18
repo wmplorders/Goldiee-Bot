@@ -5,3 +5,4 @@ google-auth-httplib2>=0.2.0
 playwright>=1.44.0
 reportlab>=4.0.0
 requests>=2.32.0
+Pillow>=10.1.0

@@ -93,7 +93,7 @@ def run_job(job):
                 last_line = last_line.split(': ', 1)[1]
             raise RuntimeError(last_line)
         result = json.loads(r.stdout.strip().splitlines()[-1])
-        job.update(status='completed', detail=result['message'], files=result.get('files', []), comparison=result.get('comparison'))
+        job.update(status='completed', detail=result['message'], files=result.get('files', []), comparison=result.get('comparison'), sales_prompt=result.get('sales_prompt'))
     except Exception as exc:
         job.update(status='failed', detail=str(exc))
     job['finished'] = datetime.now().isoformat(timespec='seconds')
@@ -105,7 +105,8 @@ def file_path(name, folder='processed'):
         raise ValueError('Invalid filename')
     root = Path(load_config()['paths'][folder]).resolve()
     p = (root / name).resolve()
-    if p.parent != root or p.suffix.lower() not in {'.xlsx','.xlsm','.pdf'}:
+    allowed={'.xlsx','.xlsm'} if folder=='uploads' else {'.xlsx','.xlsm','.pdf','.png'}
+    if p.parent != root or p.suffix.lower() not in allowed:
         raise ValueError('Unsupported file')
     return p
 
@@ -142,7 +143,7 @@ class Handler(BaseHTTPRequestHandler):
                 files = sorted(Path(c['paths']['processed']).glob('*'), key=lambda p:p.stat().st_mtime, reverse=True)
                 return self.reply(200, dict(token=TOKEN, settings=settings(), jobs=jobs(), conversations=conversations(), files=[
                     dict(name=p.name, size=p.stat().st_size, modified=datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds'))
-                    for p in files if p.is_file() and not p.name.startswith('~$') and p.suffix.lower() in {'.xlsx','.pdf'}][:300]))
+                    for p in files if p.is_file() and not p.name.startswith('~$') and p.suffix.lower() in {'.xlsx','.pdf','.png'}][:300]))
             if path == '/api/companies':
                 from .tally_context import list_loaded_companies
                 return self.reply(200, {'companies':list_loaded_companies()})
@@ -151,7 +152,8 @@ class Handler(BaseHTTPRequestHandler):
                 p = file_path(name)
                 self.send_response(200)
                 self.send_header('Content-Type', mimetypes.guess_type(p)[0] or 'application/octet-stream')
-                self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + quote(p.name))
+                inline=p.suffix.lower()=='.png' and parse_qs(urlparse(self.path).query).get('inline')==['1']
+                self.send_header('Content-Disposition', ("inline" if inline else "attachment")+"; filename*=UTF-8''" + quote(p.name))
                 self.end_headers()
                 self.wfile.write(p.read_bytes())
                 return
@@ -255,14 +257,14 @@ class Handler(BaseHTTPRequestHandler):
                 SETTINGS.write_text(json.dumps({'company':company}), encoding='utf-8')
                 return self.reply(200, {'ok':True})
             if self.path == '/api/jobs':
-                if data.get('kind') not in {'mail','purchase','unloading','challans','stock','dms','connections','compare'}:
+                if data.get('kind') not in {'mail','purchase','unloading','challans','stock','dms','connections','compare','sales'}:
                     raise ValueError('Unknown action')
-                if data['kind'] == 'compare':
+                if data['kind'] in {'compare','sales'}:
                     identifier = str(data.get('conversation_id', ''))
                     if not re.fullmatch(r'[0-9a-f]{32}', identifier) or not (CONVERSATIONS_DIR / (identifier+'.json')).exists():
-                        raise ValueError('Invalid comparison conversation')
+                        raise ValueError('Invalid conversation')
                     if len(str(data.get('text', ''))) > 2000:
-                        raise ValueError('Comparison response is too long')
+                        raise ValueError('Response is too long')
                 company = settings()['company']
                 job = dict(id=uuid.uuid4().hex, created=datetime.now().isoformat(timespec='seconds'), status='queued',
                            company=company, request=data, detail='Waiting in queue', files=[])

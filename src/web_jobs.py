@@ -10,6 +10,13 @@ def execute(data):
     c = load_config()
     kind = data['kind']
     outputs = []
+    if kind == 'sales':
+        from .sales_report import advance
+        if not data.get('conversation_id'):
+            raise ValueError('Sales report requires a conversation.')
+        attachments=[file_path(data['file'],'uploads')] if data.get('file') else []
+        result=advance('web:'+str(data['conversation_id']),str(data.get('text','')),c,attachments)
+        return dict(message=result['message'],files=[Path(p).name for p in result['files']],sales_prompt=result['prompt'])
     if kind == 'compare':
         from .sales_compare import advance
         scope = 'web:' + str(data.get('conversation_id', ''))

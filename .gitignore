@@ -14,6 +14,7 @@ data/item_master_cache/
 data/web_jobs/
 data/web_conversations/
 data/sales_compare/
+data/sales_reports/
 data/*.lock
 outputs/
 data/state.json

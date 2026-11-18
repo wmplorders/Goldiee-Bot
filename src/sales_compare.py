@@ -254,6 +254,15 @@ def has_pending(scope):
     return state.get('stage') not in {'done','cancelled'} and datetime.now(timezone.utc).timestamp()-state['updated']<86400
 
 
+@serialized
+def cancel_pending(scope):
+    path=_path(scope)
+    if path.exists():
+        state=json.loads(path.read_text(encoding='utf-8'));state['stage']='cancelled'
+        temporary=path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(state),encoding='utf-8');temporary.replace(path)
+
+
 def _prompt(state):
     stage=state['stage']
     if stage=='party':

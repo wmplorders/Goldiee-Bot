@@ -289,3 +289,46 @@ complete the sign-in in its dedicated Edge window, and wait for
 `DMS authorization verified and saved`. The helper verifies API access and the
 configured DMS company before it closes Edge. Then retry the failed web step.
 Sessions are local to each laptop; Git does not distribute login tokens.
+
+## Sales and Payment Report
+
+WhatsApp / web chat: `sales report 1/11/26 to 18/11/26`.
+The shorthand `sales report 18/11/26` starts on the first day of that month.
+The web chat also has a **Sales Report** button with date selection and confirmation.
+Use a date range within one month. Dates outside the requested range remain blank.
+
+The bot returns an alphabetical monthly Excel and a shareable PNG containing party,
+post code, the last date and preceding calendar date, and four totals/balance columns.
+If the preceding date is outside the requested period, its snapshot cells stay blank.
+All Excel rows are height 15. Dates have bold outlines and amounts use Indian comma
+grouping, displayed as whole rupees while retaining paise internally.
+
+- Spices: final customer amounts of **Tax Invoice** and **Bill of Supply** vouchers.
+- Detergent: final customer amounts of **Detergent Invoice** vouchers.
+- Payment: credits to a customer against **Main Branch**, regardless of voucher type.
+- Credit notes never reduce sales, but actual Tally closing balances include them and
+  other ledger adjustments. Debit/credit balances are directly exported as of the end date.
+- Ledgers under **Closed Customers**, including its descendants, are excluded entirely.
+  TDS/TCS numbered tax-adjustment ledgers under Sundry Debtors are not customer rows.
+- Cancelled/optional vouchers are excluded. Unexpected MAIN BRANCH reversals, missing
+  parties, incomplete voucher batches or failed balance reconciliation stop the report.
+
+New active customers prompt for their town. On a new laptop, upload a previous sales
+report when prompted (**Import Towns from Previous Report** in the web chat). The first
+two columns must be PARTY NAME and POST CODE; the bot matches only current active
+customers, never imports its sales values, and blocks conflicting saved towns.
+You can also reply with one town at a time. Towns are stored privately per configured
+company in `data/sales_report_towns.json` and are not pushed to GitHub. Send `refresh`
+or use **Recheck Customers** if customers have been moved into Closed Customers while
+the bot was asking for towns. Send `cancel` to stop.
+
+All access is read-only. The bot fetches lightweight voucher headers, then accounting
+entries in batches of ten IDs, rather than a broad nested voucher export. It verifies
+each customer's month-opening balance plus signed movements equals the closing balance,
+and checks for group/balance changes while fetching. Pending town conversations expire
+after 24 hours. PNG generation uses Pillow, not an external browser or Node installation.
+
+After updating, install dependencies and restart the portal / WhatsApp listener:
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```

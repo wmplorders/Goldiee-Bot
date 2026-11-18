@@ -38,6 +38,7 @@ def recognized_command(text: str) -> bool:
         or normalized == "dms stock"
         or normalized.startswith("unloading slip ")
         or normalized.startswith("compare ")
+        or normalized.startswith("sales report ")
     )
 
 
@@ -53,8 +54,15 @@ async def run_command(
     source: str = "whatsapp",
     undispatched_bills: list[str] | None = None,
     comparison_scope: str | None = None,
+    sales_scope: str | None = None,
 ) -> CommandResult:
     normalized = " ".join(text.casefold().split())
+    if normalized.startswith('sales report ') or sales_scope is not None:
+        if not sales_scope:
+            return CommandResult('Start Sales Report from a WhatsApp chat or the web interface.')
+        from .sales_report import advance
+        result = await asyncio.to_thread(advance, sales_scope, text, config, attachments)
+        return CommandResult(result['message'], [Path(p) for p in result['files']])
     if normalized.startswith('compare ') or comparison_scope is not None:
         if not comparison_scope:
             return CommandResult('Start this comparison from a WhatsApp chat or the web interface.')
